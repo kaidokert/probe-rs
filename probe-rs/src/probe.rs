@@ -191,7 +191,10 @@ impl Probe {
     /// This can be used to select the debug probe which
     /// should be used.
     pub fn list_all() -> Vec<DebugProbeInfo> {
+        let mut list = Vec::<DebugProbeInfo>::new();
+        /*
         let mut list = cmsisdap::tools::list_cmsisdap_devices();
+        */
         #[cfg(feature = "ftdi")]
         {
             list.extend(ftdi::list_ftdi_devices());
@@ -209,11 +212,13 @@ impl Probe {
     /// `Probe::list_all()` function to get the information
     /// about all probes available.
     pub fn open(selector: impl Into<DebugProbeSelector> + Clone) -> Result<Self, DebugProbeError> {
+        /*
         match cmsisdap::CmsisDap::new_from_selector(selector.clone()) {
             Ok(link) => return Ok(Probe::from_specific_probe(link)),
             Err(DebugProbeError::ProbeCouldNotBeCreated(ProbeCreationError::NotFound)) => {}
             Err(e) => return Err(e),
         };
+        */
         #[cfg(feature = "ftdi")]
         match ftdi::FtdiProbe::new_from_selector(selector.clone()) {
             Ok(link) => return Ok(Probe::from_specific_probe(link)),
