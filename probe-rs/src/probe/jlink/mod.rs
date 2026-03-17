@@ -50,6 +50,10 @@ use crate::{
 
 const SWO_BUFFER_SIZE: u16 = 128;
 const TIMEOUT_DEFAULT: Duration = Duration::from_millis(500);
+#[cfg(target_os = "macos")]
+const MACOS_IOKIT_NO_RESOURCES: u32 = 0xe000_02be;
+#[cfg(target_os = "macos")]
+const JLINK_OPEN_RETRY_DELAYS_MS: &[u64] = &[20, 20, 50, 50, 100, 100, 200, 200, 500, 500];
 
 /// Factory to create [`JLink`] probes.
 #[derive(Debug)]
@@ -75,28 +79,104 @@ impl ProbeFactory for JLinkFactory {
             )))
         }
 
-        let mut jlinks = match nusb::list_devices().wait() {
-            Ok(devices) => devices
-                .filter(is_jlink)
-                .filter(|info| selector.matches(info))
-                .collect::<Vec<_>>(),
-            Err(e) => return Err(open_error(e.into(), "listing USB devices")),
-        };
-
-        if jlinks.is_empty() {
-            return Err(DebugProbeError::ProbeCouldNotBeCreated(
-                super::ProbeCreationError::NotFound,
-            ));
-        } else if jlinks.len() > 1 {
-            tracing::warn!("More than one matching J-Link was found. Opening the first one.")
+        #[cfg(target_os = "macos")]
+        fn should_retry_open(error: &nusb::Error) -> bool {
+            error.os_error() == Some(MACOS_IOKIT_NO_RESOURCES)
         }
 
-        let info = jlinks.pop().unwrap();
+        let (info, handle) = {
+            #[cfg(target_os = "macos")]
+            {
+                let mut attempt = 1;
 
-        let handle = info
-            .open()
-            .wait()
-            .map_err(|e| open_error(e.into(), "opening the USB device"))?;
+                loop {
+                    let mut jlinks = match nusb::list_devices().wait() {
+                        Ok(devices) => devices
+                            .filter(is_jlink)
+                            .filter(|info| selector.matches(info))
+                            .collect::<Vec<_>>(),
+                        Err(e) => return Err(open_error(e.into(), "listing USB devices")),
+                    };
+
+                    if jlinks.is_empty() {
+                        return Err(DebugProbeError::ProbeCouldNotBeCreated(
+                            super::ProbeCreationError::NotFound,
+                        ));
+                    } else if jlinks.len() > 1 {
+                        tracing::warn!("More than one matching J-Link was found. Opening the first one.")
+                    }
+
+                    let info = jlinks.pop().unwrap();
+
+                    match info.open().wait() {
+                        Ok(handle) => break (info, handle),
+                        Err(error)
+                            if should_retry_open(&error)
+                                && JLINK_OPEN_RETRY_DELAYS_MS.get(attempt - 1).is_some() =>
+                        {
+                            let retry_delay_ms = JLINK_OPEN_RETRY_DELAYS_MS[attempt - 1];
+                            tracing::warn!(
+                                vendor_id = format_args!("{:04x}", info.vendor_id()),
+                                product_id = format_args!("{:04x}", info.product_id()),
+                                product = ?info.product_string(),
+                                serial_number = ?info.serial_number(),
+                                attempt,
+                                retry_delay_ms,
+                                error = %error,
+                                "retrying J-Link discovery/open after transient macOS IOKit error",
+                            );
+                            std::thread::sleep(Duration::from_millis(retry_delay_ms));
+                            attempt += 1;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                vendor_id = format_args!("{:04x}", info.vendor_id()),
+                                product_id = format_args!("{:04x}", info.product_id()),
+                                product = ?info.product_string(),
+                                serial_number = ?info.serial_number(),
+                                error = %error,
+                                "failed to open J-Link USB device",
+                            );
+                            return Err(open_error(error.into(), "opening the USB device"));
+                        }
+                    }
+                }
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let mut jlinks = match nusb::list_devices().wait() {
+                    Ok(devices) => devices
+                        .filter(is_jlink)
+                        .filter(|info| selector.matches(info))
+                        .collect::<Vec<_>>(),
+                    Err(e) => return Err(open_error(e.into(), "listing USB devices")),
+                };
+
+                if jlinks.is_empty() {
+                    return Err(DebugProbeError::ProbeCouldNotBeCreated(
+                        super::ProbeCreationError::NotFound,
+                    ));
+                } else if jlinks.len() > 1 {
+                    tracing::warn!("More than one matching J-Link was found. Opening the first one.")
+                }
+
+                let info = jlinks.pop().unwrap();
+                let handle = info.open().wait().map_err(|e| {
+                    tracing::warn!(
+                        vendor_id = format_args!("{:04x}", info.vendor_id()),
+                        product_id = format_args!("{:04x}", info.product_id()),
+                        product = ?info.product_string(),
+                        serial_number = ?info.serial_number(),
+                        error = %e,
+                        "failed to open J-Link USB device",
+                    );
+                    open_error(e.into(), "opening the USB device")
+                })?;
+
+                (info, handle)
+            }
+        };
 
         let configs: Vec<_> = handle.configurations().collect();
 
@@ -170,10 +250,18 @@ impl ProbeFactory for JLinkFactory {
             ))?
         };
 
-        let handle = handle
-            .claim_interface(intf)
-            .wait()
-            .map_err(|e| open_error(e.into(), "taking control over USB device"))?;
+        let handle = handle.claim_interface(intf).wait().map_err(|e| {
+            tracing::warn!(
+                vendor_id = format_args!("{:04x}", info.vendor_id()),
+                product_id = format_args!("{:04x}", info.product_id()),
+                product = ?info.product_string(),
+                serial_number = ?info.serial_number(),
+                interface = intf,
+                error = %e,
+                "failed to claim J-Link USB interface",
+            );
+            open_error(e.into(), "taking control over USB device")
+        })?;
 
         let mut this = JLink {
             read_ep,

@@ -449,8 +449,20 @@ pub fn open_device_from_selector(
             })
             .ok_or(ProbeCreationError::NotFound)?;
 
-        let Ok(device) = device_info.open_device(&hid_api) else {
-            return Err(ProbeCreationError::NotFound);
+        let device = match device_info.open_device(&hid_api) {
+            Ok(device) => device,
+            Err(error) => {
+                tracing::warn!(
+                    vendor_id = %format!("{vid:04x}"),
+                    product_id = %format!("{pid:04x}"),
+                    serial_number = ?device_info.serial_number(),
+                    interface = device_info.interface_number(),
+                    path = ?device_info.path(),
+                    error = %error,
+                    "failed to open CMSIS-DAP HID device"
+                );
+                return Err(ProbeCreationError::NotFound);
+            }
         };
 
         match device.get_product_string() {

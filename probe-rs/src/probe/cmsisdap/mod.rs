@@ -130,6 +130,10 @@ impl std::fmt::Debug for CmsisDap {
 }
 
 impl CmsisDap {
+    fn connect_request(&self) -> ConnectRequest {
+        connect_request_for(self.protocol, self.capabilities)
+    }
+
     fn new_from_device(mut device: CmsisDapDevice) -> Result<Self, DebugProbeError> {
         // Discard anything left in buffer, as otherwise
         // we'll get out of sync between requests and responses.
@@ -770,14 +774,7 @@ impl CmsisDap {
             return Ok(());
         }
 
-        let protocol: ConnectRequest = if let Some(protocol) = self.protocol {
-            match protocol {
-                WireProtocol::Swd => ConnectRequest::Swd,
-                WireProtocol::Jtag => ConnectRequest::Jtag,
-            }
-        } else {
-            ConnectRequest::DefaultPort
-        };
+        let protocol = self.connect_request();
 
         let used_protocol =
             commands::send_command(&mut self.device, &protocol).and_then(|v| match v {
@@ -1412,5 +1409,57 @@ impl From<ScanChainError> for CmsisDapError {
             ScanChainError::InvalidIdCode => CmsisDapError::InvalidIdCode,
             ScanChainError::InvalidIR => CmsisDapError::InvalidIR,
         }
+    }
+}
+
+fn connect_request_for(
+    protocol: Option<WireProtocol>,
+    capabilities: Capabilities,
+) -> ConnectRequest {
+    match protocol {
+        Some(WireProtocol::Swd) => ConnectRequest::Swd,
+        Some(WireProtocol::Jtag) => ConnectRequest::Jtag,
+        None if capabilities.swd_implemented && !capabilities.jtag_implemented => {
+            ConnectRequest::Swd
+        }
+        None if capabilities.jtag_implemented && !capabilities.swd_implemented => {
+            ConnectRequest::Jtag
+        }
+        None => ConnectRequest::DefaultPort,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capabilities(swd_implemented: bool, jtag_implemented: bool) -> Capabilities {
+        Capabilities {
+            swd_implemented,
+            jtag_implemented,
+            swo_uart_implemented: false,
+            swo_manchester_implemented: false,
+            _atomic_commands_implemented: false,
+            _test_domain_timer_implemented: false,
+            swo_streaming_trace_implemented: false,
+            _uart_communication_port_implemented: false,
+            _usb_com_port_implemented: false,
+        }
+    }
+
+    #[test]
+    fn prefers_only_supported_transport_when_protocol_unspecified() {
+        assert!(matches!(
+            connect_request_for(None, capabilities(true, false)),
+            ConnectRequest::Swd
+        ));
+    }
+
+    #[test]
+    fn keeps_default_port_when_probe_supports_multiple_transports() {
+        assert!(matches!(
+            connect_request_for(None, capabilities(true, true)),
+            ConnectRequest::DefaultPort
+        ));
     }
 }
