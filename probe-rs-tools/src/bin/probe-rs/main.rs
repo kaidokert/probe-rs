@@ -463,6 +463,39 @@ impl FormatOptions {
             }),
         }
     }
+
+    pub(crate) fn binary_format_for_path(&self, path: &Path) -> anyhow::Result<FormatKind> {
+        if self.binary_format != FormatKind::Target {
+            return Ok(self.binary_format);
+        }
+
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("hex" | "ihex") => Ok(FormatKind::Hex),
+            Some("elf") => Ok(FormatKind::Elf),
+            Some("bin") => Ok(FormatKind::Bin),
+            Some("uf2") => Ok(FormatKind::Uf2),
+            _ => anyhow::bail!(
+                "The UPDI download path requires '--binary-format' for files without a recognized extension."
+            ),
+        }
+    }
+
+    pub(crate) fn bin_base_address(&self) -> Option<u64> {
+        self.bin_options.base_address
+    }
+
+    pub(crate) fn bin_skip(&self) -> u32 {
+        self.bin_options.skip
+    }
+
+    pub(crate) fn elf_skip_sections(&self) -> &[String] {
+        &self.elf_options.skip_section
+    }
 }
 
 /// Determine the default location for the logfile

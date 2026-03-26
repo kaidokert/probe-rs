@@ -17,6 +17,14 @@ enum Region {
     Flash,
     /// EEPROM memory, addressed relative to the EEPROM start.
     Eeprom,
+    /// Fuse bytes, addressed relative to the fuse region start.
+    Fuses,
+    /// Lock byte, addressed relative to the lock region start.
+    Lock,
+    /// USERROW bytes, addressed relative to the user row start.
+    Userrow,
+    /// Production signature bytes, addressed relative to the production signature start.
+    Prodsig,
 }
 
 impl From<Region> for AvrMemoryRegion {
@@ -24,6 +32,10 @@ impl From<Region> for AvrMemoryRegion {
         match region {
             Region::Flash => AvrMemoryRegion::Flash,
             Region::Eeprom => AvrMemoryRegion::Eeprom,
+            Region::Fuses => AvrMemoryRegion::Fuses,
+            Region::Lock => AvrMemoryRegion::Lock,
+            Region::Userrow => AvrMemoryRegion::UserRow,
+            Region::Prodsig => AvrMemoryRegion::ProdSig,
         }
     }
 }

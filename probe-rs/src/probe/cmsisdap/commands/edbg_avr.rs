@@ -8,6 +8,7 @@ use super::{
             FirmwareVersionCommand, PacketSizeCommand, ProductIdCommand, SerialNumberCommand,
             VendorCommand,
         },
+        reset::{ResetRequest, ResetResponse},
     },
     send_command,
 };
@@ -29,7 +30,9 @@ const CMD3_SIGN_ON: u8 = 0x10;
 const CMD3_SIGN_OFF: u8 = 0x11;
 const CMD3_ENTER_PROGMODE: u8 = 0x15;
 const CMD3_LEAVE_PROGMODE: u8 = 0x16;
+const CMD3_ERASE_MEMORY: u8 = 0x20;
 const CMD3_READ_MEMORY: u8 = 0x21;
+const CMD3_WRITE_MEMORY: u8 = 0x23;
 
 const CMD3_INFO_SERIAL: u8 = 0x81;
 
@@ -38,9 +41,15 @@ const RSP3_INFO: u8 = 0x81;
 const RSP3_DATA: u8 = 0x84;
 const RSP3_STATUS_MASK: u8 = 0xe0;
 
+const XMEGA_ERASE_APP_PAGE: u8 = 0x04;
+
 const MTYPE_EEPROM: u8 = 0x22;
 const MTYPE_FLASH_PAGE: u8 = 0xb0;
+const MTYPE_FUSE_BITS: u8 = 0xb2;
+const MTYPE_LOCK_BITS: u8 = 0xb3;
 const MTYPE_SRAM: u8 = 0x20;
+const MTYPE_FLASH: u8 = 0xc0;
+const MTYPE_USERSIG: u8 = 0xc5;
 const MTYPE_PRODSIG: u8 = 0xc6;
 const MTYPE_SIB: u8 = 0xd3;
 
@@ -67,12 +76,20 @@ const UPDI_ADDRESS_MODE_16BIT: u8 = 0;
 const FUSES_SYSCFG0_OFFSET: u8 = 5;
 
 const AVR_SIBLEN: usize = 32;
+const M4809_FLASH_PAGE_SIZE: u32 = 128;
 const M4809_FLASH_SIZE: u32 = 0xc000;
 const M4809_EEPROM_BASE: u32 = 0x1400;
 const M4809_EEPROM_SIZE: u32 = 256;
+const M4809_FUSES_BASE: u32 = 0x1280;
+const M4809_FUSES_SIZE: u32 = 10;
+const M4809_LOCK_BASE: u32 = 0x128a;
+const M4809_LOCK_SIZE: u32 = 1;
 const M4809_SIGNATURE: [u8; 3] = [0x1e, 0x96, 0x51];
 const M4809_SIGNATURE_BASE: u32 = 0x1100;
+const M4809_PRODSIG_SIZE: u32 = 128;
 const M4809_SYSCFG_BASE: u32 = 0x0f00;
+const M4809_USERROW_BASE: u32 = 0x1300;
+const M4809_USERROW_SIZE: u32 = 64;
 
 /// Firmware version reported by the EDBG/JTAG3 general parameter block.
 #[derive(Debug, Clone)]
@@ -118,6 +135,14 @@ pub struct PkobnUpdiM4809Info {
     pub chip_revision: u8,
     /// Raw three-byte device signature.
     pub signature: [u8; 3],
+    /// Lock byte.
+    pub lock_byte: u8,
+    /// Raw fuse bytes.
+    pub fuses: Vec<u8>,
+    /// Raw USERROW bytes.
+    pub userrow: Vec<u8>,
+    /// Raw production signature bytes.
+    pub prodsig: Vec<u8>,
     /// Resolved part name when the signature matches the hardcoded target.
     pub detected_part: Option<&'static str>,
 }
@@ -129,6 +154,14 @@ pub enum AvrMemoryRegion {
     Flash,
     /// EEPROM memory, addressed relative to the start of the EEPROM region.
     Eeprom,
+    /// Fuse bytes, addressed relative to the fuse region start.
+    Fuses,
+    /// Lock byte, addressed relative to the lock region start.
+    Lock,
+    /// USERROW bytes, addressed relative to the user row start.
+    UserRow,
+    /// Production signature bytes, addressed relative to the production signature start.
+    ProdSig,
 }
 
 #[derive(Debug, thiserror::Error, docsplay::Display)]
@@ -201,6 +234,10 @@ pub fn query_pkobn_updi_m4809(
         sib_string: String::new(),
         chip_revision: 0,
         signature: [0; 3],
+        lock_byte: 0,
+        fuses: vec![],
+        userrow: vec![],
+        prodsig: vec![],
         detected_part: None,
     });
 
@@ -224,6 +261,38 @@ pub fn read_pkobn_updi_m4809_region(
 
     let _ = transport.cleanup();
     result.map_err(DebugProbeError::from)
+}
+
+/// Write bytes into narrow `ATmega4809` flash memory using page programming.
+pub fn write_pkobn_updi_m4809_flash(
+    selector: &DebugProbeSelector,
+    offset: u32,
+    data: &[u8],
+) -> Result<(), DebugProbeError> {
+    let mut transport = open_pkobn_transport(selector)?;
+    let result = (|| {
+        let _ = transport.enter_m4809_programming_session()?;
+        transport.write_flash(offset, data)
+    })();
+
+    let _ = transport.cleanup();
+    result.map_err(DebugProbeError::from)
+}
+
+/// Reset a Microchip `pkobn_updi` / `03eb:2175` probe through the generic CMSIS-DAP reset command.
+pub fn reset_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
+    if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
+        return Err(EdbgAvrError::UnsupportedProbe {
+            selector: selector.clone(),
+        }
+        .into());
+    }
+
+    let mut device = super::super::tools::open_device_from_selector(selector)?;
+    device.drain();
+    let _ = device.find_packet_size()?;
+    let _ = send_command(&mut device, &ResetRequest {})? as ResetResponse;
+    Ok(())
 }
 
 fn open_pkobn_transport(
@@ -287,14 +356,50 @@ impl EdbgAvrTransport {
         }
         info.chip_revision = chip_revision[0];
 
-        let signature = self.read_memory(MTYPE_PRODSIG, M4809_SIGNATURE_BASE, 3)?;
-        if signature.len() != 3 {
+        let lock = self.read_region(AvrMemoryRegion::Lock, 0, M4809_LOCK_SIZE)?;
+        if lock.len() != M4809_LOCK_SIZE as usize {
             return Err(EdbgAvrError::UnexpectedResponse {
-                context: "signature read",
-                details: format!("expected 3 bytes, got {}", signature.len()),
+                context: "lock read",
+                details: format!("expected 1 byte, got {}", lock.len()),
             });
         }
-        info.signature.copy_from_slice(&signature);
+        info.lock_byte = lock[0];
+
+        info.fuses = self.read_region(AvrMemoryRegion::Fuses, 0, M4809_FUSES_SIZE)?;
+        if info.fuses.len() != M4809_FUSES_SIZE as usize {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "fuse read",
+                details: format!(
+                    "expected {M4809_FUSES_SIZE} bytes, got {}",
+                    info.fuses.len()
+                ),
+            });
+        }
+
+        info.userrow = self.read_region(AvrMemoryRegion::UserRow, 0, M4809_USERROW_SIZE)?;
+        if info.userrow.len() != M4809_USERROW_SIZE as usize {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "user row read",
+                details: format!(
+                    "expected {M4809_USERROW_SIZE} bytes, got {}",
+                    info.userrow.len()
+                ),
+            });
+        }
+
+        info.prodsig = self.read_region(AvrMemoryRegion::ProdSig, 0, M4809_PRODSIG_SIZE)?;
+        if info.prodsig.len() < M4809_SIGNATURE.len() {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "production signature read",
+                details: format!(
+                    "expected at least {} bytes, got {}",
+                    M4809_SIGNATURE.len(),
+                    info.prodsig.len()
+                ),
+            });
+        }
+        info.signature
+            .copy_from_slice(&info.prodsig[..M4809_SIGNATURE.len()]);
         info.detected_part = (info.signature == M4809_SIGNATURE).then_some("ATmega4809");
 
         Ok(info)
@@ -335,6 +440,10 @@ impl EdbgAvrTransport {
         let (memory_type, base, region_size) = match region {
             AvrMemoryRegion::Flash => (MTYPE_FLASH_PAGE, 0, M4809_FLASH_SIZE),
             AvrMemoryRegion::Eeprom => (MTYPE_EEPROM, M4809_EEPROM_BASE, M4809_EEPROM_SIZE),
+            AvrMemoryRegion::Fuses => (MTYPE_FUSE_BITS, M4809_FUSES_BASE, M4809_FUSES_SIZE),
+            AvrMemoryRegion::Lock => (MTYPE_LOCK_BITS, M4809_LOCK_BASE, M4809_LOCK_SIZE),
+            AvrMemoryRegion::UserRow => (MTYPE_USERSIG, M4809_USERROW_BASE, M4809_USERROW_SIZE),
+            AvrMemoryRegion::ProdSig => (MTYPE_PRODSIG, M4809_SIGNATURE_BASE, M4809_PRODSIG_SIZE),
         };
 
         if offset > region_size || length > region_size.saturating_sub(offset) {
@@ -347,6 +456,118 @@ impl EdbgAvrTransport {
         }
 
         self.read_memory(memory_type, base + offset, length)
+    }
+
+    fn write_flash(&mut self, offset: u32, data: &[u8]) -> Result<(), EdbgAvrError> {
+        let data_len = u32::try_from(data.len()).map_err(|_| EdbgAvrError::UnexpectedResponse {
+            context: "write flash",
+            details: format!("write length exceeds 32-bit range: {}", data.len()),
+        })?;
+
+        if offset > M4809_FLASH_SIZE || data_len > M4809_FLASH_SIZE.saturating_sub(offset) {
+            return Err(EdbgAvrError::OutOfRange {
+                region: AvrMemoryRegion::Flash,
+                offset,
+                length: data_len,
+                region_size: M4809_FLASH_SIZE,
+            });
+        }
+
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let first_page = offset / M4809_FLASH_PAGE_SIZE;
+        let last_page = (offset + data_len - 1) / M4809_FLASH_PAGE_SIZE;
+
+        for page in first_page..=last_page {
+            let page_offset = page * M4809_FLASH_PAGE_SIZE;
+            let page_end = page_offset + M4809_FLASH_PAGE_SIZE;
+
+            let write_start = offset.max(page_offset);
+            let write_end = (offset + data_len).min(page_end);
+
+            let source_start = usize::try_from(write_start - offset).map_err(|_| {
+                EdbgAvrError::UnexpectedResponse {
+                    context: "write flash",
+                    details: "source start offset conversion failed".to_string(),
+                }
+            })?;
+            let source_end = usize::try_from(write_end - offset).map_err(|_| {
+                EdbgAvrError::UnexpectedResponse {
+                    context: "write flash",
+                    details: "source end offset conversion failed".to_string(),
+                }
+            })?;
+            let page_write_start = usize::try_from(write_start - page_offset).map_err(|_| {
+                EdbgAvrError::UnexpectedResponse {
+                    context: "write flash",
+                    details: "page-relative start conversion failed".to_string(),
+                }
+            })?;
+            let page_write_end = usize::try_from(write_end - page_offset).map_err(|_| {
+                EdbgAvrError::UnexpectedResponse {
+                    context: "write flash",
+                    details: "page-relative end conversion failed".to_string(),
+                }
+            })?;
+
+            let mut page_data =
+                self.read_region(AvrMemoryRegion::Flash, page_offset, M4809_FLASH_PAGE_SIZE)?;
+            if page_data.len() != M4809_FLASH_PAGE_SIZE as usize {
+                return Err(EdbgAvrError::UnexpectedResponse {
+                    context: "write flash",
+                    details: format!(
+                        "expected {M4809_FLASH_PAGE_SIZE} bytes of page data, got {}",
+                        page_data.len()
+                    ),
+                });
+            }
+
+            let original_page_data = page_data.clone();
+
+            page_data[page_write_start..page_write_end]
+                .copy_from_slice(&data[source_start..source_end]);
+            if page_data == original_page_data {
+                continue;
+            }
+
+            self.erase_flash_page(page_offset)?;
+            self.write_flash_page(page_offset, &page_data)?;
+        }
+
+        Ok(())
+    }
+
+    fn erase_flash_page(&mut self, address: u32) -> Result<(), EdbgAvrError> {
+        let mut command = Vec::with_capacity(8);
+        command.extend_from_slice(&[SCOPE_AVR, CMD3_ERASE_MEMORY, 0, XMEGA_ERASE_APP_PAGE]);
+        command.extend_from_slice(&address.to_le_bytes());
+
+        let _ = self.command(&command, "erase flash page")?;
+        Ok(())
+    }
+
+    fn write_flash_page(&mut self, address: u32, page_data: &[u8]) -> Result<(), EdbgAvrError> {
+        if page_data.len() != M4809_FLASH_PAGE_SIZE as usize {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "write flash page",
+                details: format!(
+                    "expected page size {M4809_FLASH_PAGE_SIZE}, got {}",
+                    page_data.len()
+                ),
+            });
+        }
+
+        let mut command = Vec::with_capacity(13 + page_data.len());
+        command.extend_from_slice(&[SCOPE_AVR, CMD3_WRITE_MEMORY, 0, MTYPE_FLASH]);
+        command.extend_from_slice(&address.to_le_bytes());
+        command.extend_from_slice(&M4809_FLASH_PAGE_SIZE.to_le_bytes());
+        command.push(0);
+        command.extend_from_slice(page_data);
+
+        let _ = self.command(&command, "write flash page")?;
+        Ok(())
     }
 
     fn cleanup(&mut self) -> Result<(), EdbgAvrError> {

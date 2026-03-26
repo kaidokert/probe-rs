@@ -1,11 +1,20 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
+use probe_rs::probe::{
+    DebugProbeSelector,
+    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_m4809_region},
+};
+
 use crate::FormatOptions;
 use crate::rpc::client::RpcClient;
 use crate::rpc::functions::flash::VerifyResult;
 use crate::util::cli;
+use crate::util::common_options::CliProtocol;
 use crate::util::common_options::ProbeOptions;
 use crate::util::flash::CliProgressBars;
+
+use super::download::load_updi_flash_blocks;
 
 #[derive(clap::Parser)]
 pub struct Cmd {
@@ -28,35 +37,79 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        let session = cli::attach_probe(&client, self.probe_options, false).await?;
-
-        let pb = if self.disable_progressbars {
-            None
+        if self.probe_options.protocol == Some(CliProtocol::Updi) {
+            self.run_updi_verify(&client).await
         } else {
-            Some(CliProgressBars::new())
-        };
-        let loader = session
-            .build_flash_loader(
-                self.path.to_path_buf(),
-                self.format_options,
-                None,
-                self.read_flasher_rtt,
-            )
-            .await?;
+            let session = cli::attach_probe(&client, self.probe_options, false).await?;
 
-        let result = session
-            .verify(loader.loader, async move |event| {
-                if let Some(pb) = pb.as_ref() {
-                    pb.handle(event);
-                }
-            })
-            .await?;
+            let pb = if self.disable_progressbars {
+                None
+            } else {
+                Some(CliProgressBars::new())
+            };
+            let loader = session
+                .build_flash_loader(
+                    self.path.to_path_buf(),
+                    self.format_options,
+                    None,
+                    self.read_flasher_rtt,
+                )
+                .await?;
 
-        match result {
-            VerifyResult::Ok => println!("Verification successful"),
-            VerifyResult::Mismatch => println!("Verification failed: contents do not match"),
+            let result = session
+                .verify(loader.loader, async move |event| {
+                    if let Some(pb) = pb.as_ref() {
+                        pb.handle(event);
+                    }
+                })
+                .await?;
+
+            match result {
+                VerifyResult::Ok => println!("Verification successful"),
+                VerifyResult::Mismatch => println!("Verification failed: contents do not match"),
+            }
+
+            Ok(())
+        }
+    }
+
+    async fn run_updi_verify(self, client: &RpcClient) -> anyhow::Result<()> {
+        if self.read_flasher_rtt {
+            anyhow::bail!("'verify --protocol updi' does not support '--read-flasher-rtt'.");
+        }
+        if !client.is_local_session() {
+            anyhow::bail!(
+                "The protocol 'UPDI' is currently only supported by 'verify' in a local session."
+            );
         }
 
+        let probe =
+            cli::select_probe(client, self.probe_options.probe.clone().map(Into::into)).await?;
+        let selector: DebugProbeSelector = probe.selector().into();
+        let blocks = load_updi_flash_blocks(&self.path, &self.format_options)?;
+
+        if blocks.is_empty() {
+            anyhow::bail!("No flashable data found in '{}'.", self.path.display());
+        }
+
+        for block in &blocks {
+            let readback = read_pkobn_updi_m4809_region(
+                &selector,
+                AvrMemoryRegion::Flash,
+                block.address,
+                u32::try_from(block.data.len())
+                    .context("flash block length exceeds 32-bit range")?,
+            )?;
+            if readback != block.data {
+                println!(
+                    "Verification failed: contents do not match at flash offset 0x{:04x}",
+                    block.address
+                );
+                return Ok(());
+            }
+        }
+
+        println!("Verification successful");
         Ok(())
     }
 }

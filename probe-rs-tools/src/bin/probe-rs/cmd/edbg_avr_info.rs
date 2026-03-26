@@ -80,8 +80,26 @@ pub(crate) fn print_info(info: &PkobnUpdiM4809Info) {
         "Signature: {:02x} {:02x} {:02x}",
         info.signature[0], info.signature[1], info.signature[2]
     );
+    println!("Lock byte: {:02x}", info.lock_byte);
+    println!("Fuses: {}", format_hex_bytes(&info.fuses));
+    print_hex_dump("USERROW", &info.userrow);
+    print_hex_dump("PRODSIG", &info.prodsig);
     if let Some(part) = info.detected_part {
         println!("Detected part: {part}");
+    }
+}
+
+fn format_hex_bytes(data: &[u8]) -> String {
+    data.iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn print_hex_dump(label: &str, data: &[u8]) {
+    println!("{label}:");
+    for (offset, chunk) in data.chunks(16).enumerate() {
+        println!("  {:04x}: {}", offset * 16, format_hex_bytes(chunk));
     }
 }
 

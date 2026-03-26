@@ -63,6 +63,14 @@ enum UpdiRegion {
     Flash,
     /// EEPROM memory, addressed relative to the EEPROM start.
     Eeprom,
+    /// Fuse bytes, addressed relative to the fuse region start.
+    Fuses,
+    /// Lock byte, addressed relative to the lock region start.
+    Lock,
+    /// USERROW bytes, addressed relative to the user row start.
+    Userrow,
+    /// Production signature bytes, addressed relative to the production signature start.
+    Prodsig,
 }
 
 impl From<UpdiRegion> for AvrMemoryRegion {
@@ -70,6 +78,10 @@ impl From<UpdiRegion> for AvrMemoryRegion {
         match region {
             UpdiRegion::Flash => AvrMemoryRegion::Flash,
             UpdiRegion::Eeprom => AvrMemoryRegion::Eeprom,
+            UpdiRegion::Fuses => AvrMemoryRegion::Fuses,
+            UpdiRegion::Lock => AvrMemoryRegion::Lock,
+            UpdiRegion::Userrow => AvrMemoryRegion::UserRow,
+            UpdiRegion::Prodsig => AvrMemoryRegion::ProdSig,
         }
     }
 }
