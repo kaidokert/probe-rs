@@ -41,6 +41,7 @@ const RSP3_INFO: u8 = 0x81;
 const RSP3_DATA: u8 = 0x84;
 const RSP3_STATUS_MASK: u8 = 0xe0;
 
+const XMEGA_ERASE_CHIP: u8 = 0x00;
 const XMEGA_ERASE_APP_PAGE: u8 = 0x04;
 
 const MTYPE_EEPROM: u8 = 0x22;
@@ -273,6 +274,18 @@ pub fn write_pkobn_updi_m4809_flash(
     let result = (|| {
         let _ = transport.enter_m4809_programming_session()?;
         transport.write_flash(offset, data)
+    })();
+
+    let _ = transport.cleanup();
+    result.map_err(DebugProbeError::from)
+}
+
+/// Erase the narrow `ATmega4809` target through the EDBG AVR chip erase command.
+pub fn erase_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
+    let mut transport = open_pkobn_transport(selector)?;
+    let result = (|| {
+        let _ = transport.enter_m4809_programming_session()?;
+        transport.erase_chip()
     })();
 
     let _ = transport.cleanup();
@@ -536,6 +549,15 @@ impl EdbgAvrTransport {
             self.write_flash_page(page_offset, &page_data)?;
         }
 
+        Ok(())
+    }
+
+    fn erase_chip(&mut self) -> Result<(), EdbgAvrError> {
+        let mut command = Vec::with_capacity(8);
+        command.extend_from_slice(&[SCOPE_AVR, CMD3_ERASE_MEMORY, 0, XMEGA_ERASE_CHIP]);
+        command.extend_from_slice(&0u32.to_le_bytes());
+
+        let _ = self.command(&command, "erase chip")?;
         Ok(())
     }
 
