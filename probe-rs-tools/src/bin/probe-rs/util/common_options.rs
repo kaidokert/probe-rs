@@ -8,7 +8,8 @@ use probe_rs::{
     flashing::{FileDownloadError, FlashError},
     integration::FakeProbe,
     probe::{
-        DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe, WireProtocol, list::Lister,
+        DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe,
+        WireProtocol as ProbeWireProtocol, list::Lister,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,38 @@ pub struct ReadWriteOptions {
 }
 
 /// Common options and logic when interfacing with a [Probe].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CliProtocol {
+    /// SWD
+    #[default]
+    Swd,
+    /// JTAG
+    Jtag,
+    /// UPDI
+    Updi,
+}
+
+impl std::fmt::Display for CliProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CliProtocol::Swd => f.write_str("SWD"),
+            CliProtocol::Jtag => f.write_str("JTAG"),
+            CliProtocol::Updi => f.write_str("UPDI"),
+        }
+    }
+}
+
+impl CliProtocol {
+    pub fn as_probe_rs_wire_protocol(self) -> Option<ProbeWireProtocol> {
+        match self {
+            CliProtocol::Swd => Some(ProbeWireProtocol::Swd),
+            CliProtocol::Jtag => Some(ProbeWireProtocol::Jtag),
+            CliProtocol::Updi => None,
+        }
+    }
+}
+
 #[derive(clap::Parser, Clone, Debug, Serialize, Deserialize)]
 pub struct ProbeOptions {
     #[arg(long, env = "PROBE_RS_CHIP", help_heading = "PROBE CONFIGURATION")]
@@ -97,9 +130,9 @@ pub struct ProbeOptions {
     )]
     pub chip_description_path: Option<PathBuf>,
 
-    /// Protocol used to connect to chip. Possible options: [swd, jtag]
+    /// Protocol used to connect to chip. Possible options: [swd, jtag, updi]
     #[arg(long, env = "PROBE_RS_PROTOCOL", help_heading = "PROBE CONFIGURATION")]
-    pub protocol: Option<WireProtocol>,
+    pub protocol: Option<CliProtocol>,
 
     /// Disable interactive probe selection
     #[arg(
@@ -273,8 +306,12 @@ impl<'r> LoadedProbeOptions<'r> {
         };
 
         if let Some(protocol) = self.0.protocol {
+            let Some(probe_protocol) = protocol.as_probe_rs_wire_protocol() else {
+                return Err(OperationError::UnsupportedCliProtocol { protocol });
+            };
+
             // Select protocol and speed
-            probe.select_protocol(protocol).map_err(|error| {
+            probe.select_protocol(probe_protocol).map_err(|error| {
                 OperationError::FailedToSelectProtocol {
                     source: error,
                     protocol,
@@ -528,8 +565,11 @@ pub enum OperationError {
     #[error("The protocol '{protocol}' could not be selected.")]
     FailedToSelectProtocol {
         source: DebugProbeError,
-        protocol: WireProtocol,
+        protocol: CliProtocol,
     },
+
+    #[error("The protocol '{protocol}' is not supported by this command.")]
+    UnsupportedCliProtocol { protocol: CliProtocol },
 
     #[error("The protocol speed could not be set to '{speed}' kHz.")]
     FailedToSelectProtocolSpeed { source: DebugProbeError, speed: u32 },

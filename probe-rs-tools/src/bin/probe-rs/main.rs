@@ -124,6 +124,7 @@ impl Cli {
             Subcommand::Reset(cmd) => cmd.run(client).await,
             Subcommand::Debug(cmd) => cmd.run(client, utc_offset).await,
             Subcommand::Download(cmd) => cmd.run(client).await,
+            Subcommand::EdbgAvrInfo(cmd) => cmd.run(&lister),
             Subcommand::Run(cmd) => cmd.run(client, utc_offset).await,
             Subcommand::Attach(cmd) => cmd.run(client, utc_offset).await,
             Subcommand::Verify(cmd) => cmd.run(client).await,
@@ -167,6 +168,8 @@ enum Subcommand {
     Debug(cmd::debug::Cmd),
     /// Download memory to attached target
     Download(cmd::download::Cmd),
+    /// Experimental: query a Curiosity Nano nEDBG probe in AVR UPDI mode for an ATmega4809 target
+    EdbgAvrInfo(cmd::edbg_avr_info::Cmd),
     /// Compare memory to attached target
     Verify(cmd::verify::Cmd),
     /// Erase all nonvolatile memory of attached target

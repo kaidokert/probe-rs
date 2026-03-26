@@ -42,7 +42,7 @@ use crate::{
         },
     },
     util::{
-        common_options::{BinaryDownloadOptions, ProbeOptions},
+        common_options::{BinaryDownloadOptions, CliProtocol, ProbeOptions},
         flash::CliProgressBars,
         logging,
         rtt::{
@@ -78,11 +78,19 @@ pub async fn attach_probe(
     }
 
     let probe = select_probe(client, probe_options.probe.map(Into::into)).await?;
+    let protocol = match probe_options.protocol {
+        Some(CliProtocol::Swd) => Some(crate::rpc::functions::probe::WireProtocol::Swd),
+        Some(CliProtocol::Jtag) => Some(crate::rpc::functions::probe::WireProtocol::Jtag),
+        Some(CliProtocol::Updi) => {
+            anyhow::bail!("The protocol 'UPDI' is not supported by this command.")
+        }
+        None => None,
+    };
 
     let result = client
         .attach_probe(AttachRequest {
             chip: probe_options.chip,
-            protocol: probe_options.protocol.map(Into::into),
+            protocol,
             probe,
             speed: probe_options.speed,
             connect_under_reset: probe_options.connect_under_reset,

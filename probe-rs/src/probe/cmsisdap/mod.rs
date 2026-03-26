@@ -1,6 +1,9 @@
 //! CMSIS-DAP probe implementation.
 mod commands;
 mod tools;
+pub use self::commands::edbg_avr::{
+    IceFirmwareVersion, PkobnUpdiM4809Info, query_pkobn_updi_m4809,
+};
 
 use crate::{
     CoreStatus,

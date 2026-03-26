@@ -163,7 +163,10 @@ impl SessionConfig {
         ProbeOptions {
             chip: self.chip.clone(),
             chip_description_path: self.chip_description_path.clone(),
-            protocol: self.wire_protocol,
+            protocol: self.wire_protocol.map(|protocol| match protocol {
+                WireProtocol::Swd => crate::util::common_options::CliProtocol::Swd,
+                WireProtocol::Jtag => crate::util::common_options::CliProtocol::Jtag,
+            }),
             non_interactive: true,
             probe: self.probe.clone(),
             speed: self.speed,

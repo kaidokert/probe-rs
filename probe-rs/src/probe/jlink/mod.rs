@@ -103,7 +103,9 @@ impl ProbeFactory for JLinkFactory {
                             super::ProbeCreationError::NotFound,
                         ));
                     } else if jlinks.len() > 1 {
-                        tracing::warn!("More than one matching J-Link was found. Opening the first one.")
+                        tracing::warn!(
+                            "More than one matching J-Link was found. Opening the first one."
+                        )
                     }
 
                     let info = jlinks.pop().unwrap();
@@ -158,7 +160,9 @@ impl ProbeFactory for JLinkFactory {
                         super::ProbeCreationError::NotFound,
                     ));
                 } else if jlinks.len() > 1 {
-                    tracing::warn!("More than one matching J-Link was found. Opening the first one.")
+                    tracing::warn!(
+                        "More than one matching J-Link was found. Opening the first one."
+                    )
                 }
 
                 let info = jlinks.pop().unwrap();

@@ -76,6 +76,10 @@ pub(crate) fn render_diagnostics(registry: &Registry, error: OperationError) {
                 "You can select a probe with the `--probe` argument. See `--help` for how to use it.".into()
             ],
         ),
+        OperationError::UnsupportedCliProtocol { .. } => (
+            error.to_string(),
+            vec!["Use `probe-rs info --protocol updi` for the current narrow AVR path.".into()],
+        ),
         OperationError::FlashingFailed { source, target, target_spec, .. } => generate_flash_error_hints(registry, source, target, target_spec),
         OperationError::ChipDescriptionNotFound{ .. } => (
             error.to_string(),
