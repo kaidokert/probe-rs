@@ -1,15 +1,22 @@
-use crate::rpc::client::{CoreInterface, RpcClient};
-
 use crate::CoreOptions;
+use crate::rpc::client::{CoreInterface, RpcClient};
 use crate::util::cli;
 use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
 use crate::util::read_output::OutputFormat;
+use anyhow::Context;
+use probe_rs::probe::{
+    DebugProbeSelector,
+    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_m4809_region},
+};
 use std::path::PathBuf;
 
 /// Read from target memory address
 ///
 /// e.g. probe-rs read b32 0x400E1490 2
 ///      Reads 2 32-bit words from address 0x400E1490
+///
+/// e.g. probe-rs read --protocol updi --region eeprom b8 0x00 16
+///      Reads 16 bytes from EEPROM offset 0x00 on the narrow AVR UPDI path
 ///
 /// Default output is a space separated list of hex values padded to the read word width.
 /// e.g. 2 words
@@ -31,6 +38,12 @@ pub struct Cmd {
     #[clap(flatten)]
     read_write_options: ReadWriteOptions,
 
+    /// AVR UPDI memory region to read from.
+    ///
+    /// This is only used with `--protocol updi`. When omitted there, flash is used.
+    #[arg(long, value_enum)]
+    region: Option<UpdiRegion>,
+
     /// Number of words to read from the target
     words: usize,
 
@@ -44,18 +57,48 @@ pub struct Cmd {
     format: OutputFormat,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum UpdiRegion {
+    /// Flash memory, addressed relative to the flash start.
+    Flash,
+    /// EEPROM memory, addressed relative to the EEPROM start.
+    Eeprom,
+}
+
+impl From<UpdiRegion> for AvrMemoryRegion {
+    fn from(region: UpdiRegion) -> Self {
+        match region {
+            UpdiRegion::Flash => AvrMemoryRegion::Flash,
+            UpdiRegion::Eeprom => AvrMemoryRegion::Eeprom,
+        }
+    }
+}
+
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        let session = cli::attach_probe(&client, self.probe_options, false).await?;
-        let core = session.core(self.shared.core);
+        let data = if self.probe_options.protocol
+            == Some(crate::util::common_options::CliProtocol::Updi)
+        {
+            self.read_updi_memory(&client).await?
+        } else {
+            if self.region.is_some() {
+                anyhow::bail!("The option '--region' is only supported with '--protocol updi'.");
+            }
 
-        let data = Self::read_memory(
-            core,
-            self.read_write_options.address,
-            self.read_write_options.width,
-            self.words,
-        )
-        .await?;
+            let session = cli::attach_probe(&client, self.probe_options.clone(), false).await?;
+            let core = session.core(self.shared.core);
+
+            let data = Self::read_memory(
+                core,
+                self.read_write_options.address,
+                self.read_write_options.width,
+                self.words,
+            )
+            .await?;
+
+            session.resume_all_cores().await?;
+            data
+        };
 
         match self.output {
             Some(path) => Self::save_to_file(
@@ -73,9 +116,30 @@ impl Cmd {
             )?,
         };
 
-        session.resume_all_cores().await?;
-
         Ok(())
+    }
+
+    async fn read_updi_memory(&self, client: &RpcClient) -> anyhow::Result<Vec<u8>> {
+        if !client.is_local_session() {
+            anyhow::bail!(
+                "The protocol 'UPDI' is currently only supported by 'read' in a local session."
+            );
+        }
+
+        let probe =
+            cli::select_probe(client, self.probe_options.probe.clone().map(Into::into)).await?;
+        let selector: DebugProbeSelector = probe.selector().into();
+        let region: AvrMemoryRegion = self.region.unwrap_or(UpdiRegion::Flash).into();
+        let byte_len = self
+            .words
+            .checked_mul(self.read_write_options.width.byte_width())
+            .context("requested read length overflowed")?;
+        let byte_len =
+            u32::try_from(byte_len).context("requested read length exceeds 32-bit range")?;
+        let offset = u32::try_from(self.read_write_options.address)
+            .context("region-relative AVR address exceeds 32-bit range")?;
+
+        read_pkobn_updi_m4809_region(&selector, region, offset, byte_len).map_err(Into::into)
     }
 
     async fn read_memory(

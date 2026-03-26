@@ -13,6 +13,8 @@ use super::edbg_avr_info::select_probe_for_edbg;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum Region {
+    /// Flash memory, addressed relative to the flash start.
+    Flash,
     /// EEPROM memory, addressed relative to the EEPROM start.
     Eeprom,
 }
@@ -20,6 +22,7 @@ enum Region {
 impl From<Region> for AvrMemoryRegion {
     fn from(region: Region) -> Self {
         match region {
+            Region::Flash => AvrMemoryRegion::Flash,
             Region::Eeprom => AvrMemoryRegion::Eeprom,
         }
     }
@@ -31,6 +34,9 @@ impl From<Region> for AvrMemoryRegion {
 ///
 /// e.g. `probe-rs edbg-avr-read --region eeprom b8 0x00 16`
 ///      Reads 16 bytes from EEPROM starting at EEPROM offset 0x00.
+///
+/// e.g. `probe-rs edbg-avr-read --region flash b8 0x00 16`
+///      Reads 16 bytes from flash starting at flash offset 0x00.
 #[derive(clap::Parser)]
 #[clap(verbatim_doc_comment)]
 pub struct Cmd {

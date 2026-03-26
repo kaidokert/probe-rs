@@ -39,6 +39,7 @@ const RSP3_DATA: u8 = 0x84;
 const RSP3_STATUS_MASK: u8 = 0xe0;
 
 const MTYPE_EEPROM: u8 = 0x22;
+const MTYPE_FLASH_PAGE: u8 = 0xb0;
 const MTYPE_SRAM: u8 = 0x20;
 const MTYPE_PRODSIG: u8 = 0xc6;
 const MTYPE_SIB: u8 = 0xd3;
@@ -66,6 +67,7 @@ const UPDI_ADDRESS_MODE_16BIT: u8 = 0;
 const FUSES_SYSCFG0_OFFSET: u8 = 5;
 
 const AVR_SIBLEN: usize = 32;
+const M4809_FLASH_SIZE: u32 = 0xc000;
 const M4809_EEPROM_BASE: u32 = 0x1400;
 const M4809_EEPROM_SIZE: u32 = 256;
 const M4809_SIGNATURE: [u8; 3] = [0x1e, 0x96, 0x51];
@@ -123,6 +125,8 @@ pub struct PkobnUpdiM4809Info {
 /// Memory region within the narrow `ATmega4809` UPDI implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvrMemoryRegion {
+    /// Flash memory, addressed relative to the start of flash.
+    Flash,
     /// EEPROM memory, addressed relative to the start of the EEPROM region.
     Eeprom,
 }
@@ -329,6 +333,7 @@ impl EdbgAvrTransport {
         length: u32,
     ) -> Result<Vec<u8>, EdbgAvrError> {
         let (memory_type, base, region_size) = match region {
+            AvrMemoryRegion::Flash => (MTYPE_FLASH_PAGE, 0, M4809_FLASH_SIZE),
             AvrMemoryRegion::Eeprom => (MTYPE_EEPROM, M4809_EEPROM_BASE, M4809_EEPROM_SIZE),
         };
 
