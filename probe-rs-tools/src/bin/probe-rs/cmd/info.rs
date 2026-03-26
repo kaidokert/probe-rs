@@ -1,6 +1,6 @@
 use std::{fmt::Display, num::ParseIntError};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use jep106::JEP106Code;
 use probe_rs::{
     architecture::arm::{
@@ -42,6 +42,9 @@ fn parse_hex(src: &str) -> Result<u32, ParseIntError> {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
+        let mut had_success = false;
+        let mut last_error = None;
+
         let protocols = if let Some(protocol) = self.common.protocol {
             vec![protocol]
         } else {
@@ -88,6 +91,7 @@ impl Cmd {
                 .await;
 
             if let Err(error) = result {
+                last_error = Some(anyhow!("{error}"));
                 println!("Error while probing target: {error}");
             }
 
@@ -96,13 +100,20 @@ impl Cmd {
                     println!("{message}");
                 }
             } else {
+                had_success = true;
                 for message in successes {
                     println!("{message}");
                 }
             }
         }
 
-        Ok(())
+        if had_success {
+            Ok(())
+        } else if let Some(error) = last_error {
+            Err(error)
+        } else {
+            Err(anyhow!("probing target produced no successful results"))
+        }
     }
 }
 
