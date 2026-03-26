@@ -2,7 +2,8 @@
 mod commands;
 mod tools;
 pub use self::commands::edbg_avr::{
-    IceFirmwareVersion, PkobnUpdiM4809Info, query_pkobn_updi_m4809,
+    AvrMemoryRegion, IceFirmwareVersion, PkobnUpdiM4809Info, query_pkobn_updi_m4809,
+    read_pkobn_updi_m4809_region,
 };
 
 use crate::{

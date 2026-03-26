@@ -8,6 +8,7 @@ pub mod dap_server;
 pub mod debug;
 pub mod download;
 pub mod edbg_avr_info;
+pub mod edbg_avr_read;
 pub mod erase;
 pub mod gdb_server;
 pub mod info;

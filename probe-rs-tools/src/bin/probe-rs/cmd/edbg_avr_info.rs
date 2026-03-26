@@ -23,7 +23,7 @@ pub struct Cmd {
 
 impl Cmd {
     pub fn run(self, lister: &Lister) -> Result<()> {
-        let probe = select_probe(lister, self.probe.as_ref(), self.non_interactive)?;
+        let probe = select_probe_for_edbg(lister, self.probe.as_ref(), self.non_interactive)?;
         let selector = DebugProbeSelector::from(&probe);
         let info = query_pkobn_updi_m4809(&selector)?;
 
@@ -85,7 +85,7 @@ pub(crate) fn print_info(info: &PkobnUpdiM4809Info) {
     }
 }
 
-fn select_probe(
+pub(crate) fn select_probe_for_edbg(
     lister: &Lister,
     selector: Option<&DebugProbeSelector>,
     non_interactive: bool,

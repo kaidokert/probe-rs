@@ -38,6 +38,7 @@ const RSP3_INFO: u8 = 0x81;
 const RSP3_DATA: u8 = 0x84;
 const RSP3_STATUS_MASK: u8 = 0xe0;
 
+const MTYPE_EEPROM: u8 = 0x22;
 const MTYPE_SRAM: u8 = 0x20;
 const MTYPE_PRODSIG: u8 = 0xc6;
 const MTYPE_SIB: u8 = 0xd3;
@@ -65,6 +66,8 @@ const UPDI_ADDRESS_MODE_16BIT: u8 = 0;
 const FUSES_SYSCFG0_OFFSET: u8 = 5;
 
 const AVR_SIBLEN: usize = 32;
+const M4809_EEPROM_BASE: u32 = 0x1400;
+const M4809_EEPROM_SIZE: u32 = 256;
 const M4809_SIGNATURE: [u8; 3] = [0x1e, 0x96, 0x51];
 const M4809_SIGNATURE_BASE: u32 = 0x1100;
 const M4809_SYSCFG_BASE: u32 = 0x0f00;
@@ -117,6 +120,13 @@ pub struct PkobnUpdiM4809Info {
     pub detected_part: Option<&'static str>,
 }
 
+/// Memory region within the narrow `ATmega4809` UPDI implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvrMemoryRegion {
+    /// EEPROM memory, addressed relative to the start of the EEPROM region.
+    Eeprom,
+}
+
 #[derive(Debug, thiserror::Error, docsplay::Display)]
 pub enum EdbgAvrError {
     /// Error while using the CMSIS-DAP transport layer.
@@ -132,6 +142,13 @@ pub enum EdbgAvrError {
     },
     /// EDBG AVR command {context} failed with status code 0x{code:02x}
     CommandFailed { context: &'static str, code: u8 },
+    /// Requested read extends past the end of the selected {region:?} region.
+    OutOfRange {
+        region: AvrMemoryRegion,
+        offset: u32,
+        length: u32,
+        region_size: u32,
+    },
 }
 
 impl ProbeError for EdbgAvrError {}
@@ -188,6 +205,39 @@ pub fn query_pkobn_updi_m4809(
     result.map_err(DebugProbeError::from)
 }
 
+/// Read bytes from a narrow `ATmega4809` UPDI memory region.
+pub fn read_pkobn_updi_m4809_region(
+    selector: &DebugProbeSelector,
+    region: AvrMemoryRegion,
+    offset: u32,
+    length: u32,
+) -> Result<Vec<u8>, DebugProbeError> {
+    let mut transport = open_pkobn_transport(selector)?;
+    let result = (|| {
+        let _ = transport.enter_m4809_programming_session()?;
+        transport.read_region(region, offset, length)
+    })();
+
+    let _ = transport.cleanup();
+    result.map_err(DebugProbeError::from)
+}
+
+fn open_pkobn_transport(
+    selector: &DebugProbeSelector,
+) -> Result<EdbgAvrTransport, DebugProbeError> {
+    if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
+        return Err(EdbgAvrError::UnsupportedProbe {
+            selector: selector.clone(),
+        }
+        .into());
+    }
+
+    let mut device = super::super::tools::open_device_from_selector(selector)?;
+    device.drain();
+    let _ = device.find_packet_size()?;
+    Ok(EdbgAvrTransport::new(device))
+}
+
 struct EdbgAvrTransport {
     device: CmsisDapDevice,
     command_sequence: u16,
@@ -213,29 +263,12 @@ impl EdbgAvrTransport {
         &mut self,
         mut info: PkobnUpdiM4809Info,
     ) -> Result<PkobnUpdiM4809Info, EdbgAvrError> {
-        self.prepare()?;
-        self.general_sign_on()?;
-
+        let partial_family_id = self.enter_m4809_programming_session()?;
         info.ice_firmware_version = self.read_ice_firmware_version()?;
         info.ice_serial = self.get_info_string(CMD3_INFO_SERIAL)?;
-
-        self.set_param(SCOPE_AVR, 0, PARM3_ARCH, &[PARM3_ARCH_UPDI])?;
-        self.set_param(SCOPE_AVR, 0, PARM3_SESS_PURPOSE, &[PARM3_SESS_PROGRAMMING])?;
-        self.set_param(SCOPE_AVR, 1, PARM3_CONNECTION, &[PARM3_CONN_UPDI])?;
-
         info.target_voltage_mv = self.get_u16_param(SCOPE_GENERAL, 1, PARM3_VTARGET)?;
         info.updi_clock_khz = self.get_u16_param(SCOPE_AVR, 1, PARM3_CLK_XMEGA_PDI)?;
-
-        self.set_param(
-            SCOPE_AVR,
-            2,
-            PARM3_DEVICEDESC,
-            &m4809_updi_device_descriptor(),
-        )?;
-
-        let avr_sign_on_response = self.command(&[SCOPE_AVR, CMD3_SIGN_ON, 0, 0], "AVR sign-on")?;
-        self.avr_signed_on = true;
-        info.partial_family_id = partial_family_id_from_response(&avr_sign_on_response);
+        info.partial_family_id = partial_family_id;
 
         info.sib_string = trim_ascii_nul(self.read_memory(MTYPE_SIB, 0, AVR_SIBLEN as u32)?);
 
@@ -261,6 +294,54 @@ impl EdbgAvrTransport {
         info.detected_part = (info.signature == M4809_SIGNATURE).then_some("ATmega4809");
 
         Ok(info)
+    }
+
+    fn enter_m4809_programming_session(&mut self) -> Result<Option<String>, EdbgAvrError> {
+        if self.programming_enabled {
+            return Ok(None);
+        }
+
+        self.prepare()?;
+        self.general_sign_on()?;
+
+        self.set_param(SCOPE_AVR, 0, PARM3_ARCH, &[PARM3_ARCH_UPDI])?;
+        self.set_param(SCOPE_AVR, 0, PARM3_SESS_PURPOSE, &[PARM3_SESS_PROGRAMMING])?;
+        self.set_param(SCOPE_AVR, 1, PARM3_CONNECTION, &[PARM3_CONN_UPDI])?;
+        self.set_param(
+            SCOPE_AVR,
+            2,
+            PARM3_DEVICEDESC,
+            &m4809_updi_device_descriptor(),
+        )?;
+
+        let avr_sign_on_response = self.command(&[SCOPE_AVR, CMD3_SIGN_ON, 0, 0], "AVR sign-on")?;
+        self.avr_signed_on = true;
+        let partial_family_id = partial_family_id_from_response(&avr_sign_on_response);
+        self.enter_progmode()?;
+
+        Ok(partial_family_id)
+    }
+
+    fn read_region(
+        &mut self,
+        region: AvrMemoryRegion,
+        offset: u32,
+        length: u32,
+    ) -> Result<Vec<u8>, EdbgAvrError> {
+        let (memory_type, base, region_size) = match region {
+            AvrMemoryRegion::Eeprom => (MTYPE_EEPROM, M4809_EEPROM_BASE, M4809_EEPROM_SIZE),
+        };
+
+        if offset > region_size || length > region_size.saturating_sub(offset) {
+            return Err(EdbgAvrError::OutOfRange {
+                region,
+                offset,
+                length,
+                region_size,
+            });
+        }
+
+        self.read_memory(memory_type, base + offset, length)
     }
 
     fn cleanup(&mut self) -> Result<(), EdbgAvrError> {

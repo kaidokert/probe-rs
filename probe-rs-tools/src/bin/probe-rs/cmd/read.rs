@@ -1,122 +1,10 @@
-use anyhow::Context;
-use ihex::Record;
-use itertools::Itertools;
-
 use crate::rpc::client::{CoreInterface, RpcClient};
 
 use crate::CoreOptions;
 use crate::util::cli;
 use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
-use std::io::Write;
+use crate::util::read_output::OutputFormat;
 use std::path::PathBuf;
-
-#[derive(clap::ValueEnum, Clone, Copy)]
-enum OutputFormat {
-    /// Intel Hex Format
-    Ihex,
-    /// Simple list of hexadecimal numbers
-    SimpleHex,
-    /// Hexadecimal numbers formatted into a table
-    HexTable,
-    /// The raw binary
-    Binary,
-}
-
-impl OutputFormat {
-    fn write(
-        self,
-        dst: impl Write,
-        address: u64,
-        width: ReadWriteBitWidth,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        match self {
-            OutputFormat::Binary => Self::write_binary(dst, data),
-            OutputFormat::Ihex => Self::write_ihex(dst, address, data),
-            OutputFormat::SimpleHex => Self::write_simple_hex(dst, width, data),
-            OutputFormat::HexTable => Self::write_hex_table(dst, address, width, data),
-        }
-    }
-
-    fn write_simple_hex(
-        mut dst: impl Write,
-        width: ReadWriteBitWidth,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        let bytes = match width {
-            ReadWriteBitWidth::B8 => 1,
-            ReadWriteBitWidth::B16 => 2,
-            ReadWriteBitWidth::B32 => 4,
-            ReadWriteBitWidth::B64 => 8,
-        };
-
-        let mut first = true;
-        for window in data.chunks(bytes) {
-            if first {
-                first = false;
-            } else {
-                write!(dst, " ")?;
-            }
-
-            for byte in window.iter().rev() {
-                write!(dst, "{byte:02x}")?;
-            }
-        }
-
-        writeln!(dst)?;
-        Ok(())
-    }
-
-    fn write_hex_table(
-        mut dst: impl Write,
-        mut address: u64,
-        width: ReadWriteBitWidth,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        let bytes_in_line = match width {
-            ReadWriteBitWidth::B8 => 8,
-            ReadWriteBitWidth::B16 => 16,
-            ReadWriteBitWidth::B32 | ReadWriteBitWidth::B64 => 32,
-        };
-        for window in data.chunks(bytes_in_line) {
-            write!(dst, "{address:08x}: ")?;
-            Self::write_simple_hex(&mut dst, width, window)?;
-            address += bytes_in_line as u64;
-        }
-
-        Ok(())
-    }
-
-    fn write_binary(mut dst: impl Write, data: &[u8]) -> anyhow::Result<()> {
-        dst.write_all(data)?;
-
-        Ok(())
-    }
-
-    fn write_ihex(mut dst: impl Write, address: u64, data: &[u8]) -> anyhow::Result<()> {
-        let mut running_address = address;
-        let mut records = vec![];
-
-        for chunk in &data.iter().copied().chunks(255) {
-            let address_msbs: u16 = (running_address >> 16)
-                .try_into()
-                .context("Hex format only supports addressing up to 32 bits")?;
-
-            records.push(Record::ExtendedLinearAddress(address_msbs));
-
-            records.push(Record::Data {
-                offset: (running_address & 0xFFFF) as u16,
-                value: chunk.collect(),
-            });
-            running_address += 255;
-        }
-        records.push(Record::EndOfFile);
-        let hexdata = ihex::create_object_file_representation(&records)?;
-        dst.write_all(hexdata.as_bytes())?;
-
-        Ok(())
-    }
-}
 
 /// Read from target memory address
 ///
@@ -236,9 +124,7 @@ impl Cmd {
         width: ReadWriteBitWidth,
         format: OutputFormat,
     ) -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(path)?;
-        format.write(&mut file, address, width, data)?;
-        Ok(())
+        format.save_to_file(address, width, data, &path)
     }
 
     fn print_to_console(
@@ -247,8 +133,6 @@ impl Cmd {
         width: ReadWriteBitWidth,
         format: OutputFormat,
     ) -> anyhow::Result<()> {
-        let mut stdout = std::io::stdout();
-        format.write(&mut stdout, address, width, data)?;
-        Ok(())
+        format.print_to_console(address, width, data)
     }
 }

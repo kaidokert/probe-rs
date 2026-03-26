@@ -73,6 +73,17 @@ pub enum ReadWriteBitWidth {
     B64 = 64,
 }
 
+impl ReadWriteBitWidth {
+    pub fn byte_width(self) -> usize {
+        match self {
+            ReadWriteBitWidth::B8 => 1,
+            ReadWriteBitWidth::B16 => 2,
+            ReadWriteBitWidth::B32 => 4,
+            ReadWriteBitWidth::B64 => 8,
+        }
+    }
+}
+
 /// Common options for read/write operations to a target device.
 #[derive(Debug, clap::Parser)]
 pub struct ReadWriteOptions {
