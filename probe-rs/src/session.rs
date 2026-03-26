@@ -1,3 +1,4 @@
+use crate::MemoryInterface;
 use crate::{
     Core, CoreType, Error,
     architecture::{
@@ -20,7 +21,12 @@ use crate::{
     core::{Architecture, CombinedCoreState},
     probe::{
         AttachMethod, DebugProbeError, Probe, ProbeCreationError, WireProtocol,
-        fake_probe::FakeProbe, list::Lister,
+        cmsisdap::{
+            AvrMemoryRegion, CmsisDap, erase_attached_pkobn_updi_m4809,
+            read_attached_pkobn_updi_m4809_region, write_attached_pkobn_updi_m4809_flash,
+        },
+        fake_probe::FakeProbe,
+        list::Lister,
     },
 };
 use std::ops::DerefMut;
@@ -100,6 +106,7 @@ impl fmt::Debug for JtagInterface {
 enum ArchitectureInterface {
     Arm(Box<dyn ArmDebugInterface + 'static>),
     Jtag(Probe, Vec<JtagInterface>),
+    Avr(Probe),
 }
 
 impl fmt::Debug for ArchitectureInterface {
@@ -110,6 +117,7 @@ impl fmt::Debug for ArchitectureInterface {
                 .debug_tuple("ArchitectureInterface::Jtag(..)")
                 .field(ifaces)
                 .finish(),
+            ArchitectureInterface::Avr(_) => f.write_str("ArchitectureInterface::Avr(..)"),
         }
     }
 }
@@ -144,6 +152,7 @@ impl ArchitectureInterface {
                     }
                 }
             }
+            ArchitectureInterface::Avr(_) => Err(Error::NotImplemented("AVR core attach")),
         }
     }
 }
@@ -158,30 +167,48 @@ impl Session {
         registry: &Registry,
     ) -> Result<Self, Error> {
         let (probe, target) = get_target_from_selector(target, attach_method, probe, registry)?;
+        let architecture = target.architecture();
 
-        let cores = target
-            .cores
-            .iter()
-            .enumerate()
-            .map(|(id, core)| {
-                Core::create_state(
-                    id,
-                    core.core_access_options.clone(),
-                    &target,
-                    core.core_type,
-                )
-            })
-            .collect();
-
-        let mut session = if let Architecture::Arm = target.architecture() {
-            Self::attach_arm_debug_interface(probe, target, attach_method, permissions, cores)?
+        let cores = if architecture == Architecture::AVR {
+            Vec::new()
         } else {
-            Self::attach_jtag(probe, target, attach_method, permissions, cores)?
+            target
+                .cores
+                .iter()
+                .enumerate()
+                .map(|(id, core)| {
+                    Core::create_state(
+                        id,
+                        core.core_access_options.clone(),
+                        &target,
+                        core.core_type,
+                    )
+                })
+                .collect()
+        };
+
+        let mut session = match architecture {
+            Architecture::Arm => {
+                Self::attach_arm_debug_interface(probe, target, attach_method, permissions, cores)?
+            }
+            Architecture::Riscv | Architecture::Xtensa => {
+                Self::attach_jtag(probe, target, attach_method, permissions, cores)?
+            }
+            Architecture::AVR => Self::attach_avr_stub(probe, target)?,
         };
 
         session.clear_all_hw_breakpoints()?;
 
         Ok(session)
+    }
+
+    fn attach_avr_stub(probe: Probe, target: Target) -> Result<Self, Error> {
+        Ok(Session {
+            target,
+            interfaces: ArchitectureInterface::Avr(probe),
+            cores: Vec::new(),
+            configured_trace_sink: None,
+        })
     }
 
     fn attach_arm_debug_interface(
@@ -721,6 +748,9 @@ impl Session {
             DebugSequence::Xtensa(xtensa_debug_sequence) => {
                 xtensa_debug_sequence.prepare_running_on_ram(self, vector_table_addr, core_id)
             }
+            DebugSequence::Avr(_) => Err(Error::Other(
+                "Debug sequence for AVR does not support prepare_running_on_ram".to_string(),
+            )),
         }
     }
 
@@ -773,6 +803,22 @@ impl Session {
         }
         tracing::info!("Device Erased Successfully");
         Ok(())
+    }
+
+    /// Erase all target flash memory using either the generic flashing path or a narrow AVR
+    /// programmer-style chip erase.
+    pub fn erase_all(&mut self) -> Result<(), Error> {
+        match &mut self.interfaces {
+            ArchitectureInterface::Avr(probe) => {
+                let cmsis = probe
+                    .try_into::<CmsisDap>()
+                    .ok_or(Error::NotImplemented("AVR CMSIS-DAP session erase"))?;
+                erase_attached_pkobn_updi_m4809(cmsis).map_err(Error::from)
+            }
+            _ => Err(Error::NotImplemented(
+                "Session erase-all is only implemented for AVR local sessions.",
+            )),
+        }
     }
 
     /// Reads all the available ARM CoresightComponents of the currently attached target.
@@ -869,7 +915,174 @@ impl Session {
                     Architecture::Xtensa
                 }
             }
+            ArchitectureInterface::Avr(_) => Architecture::AVR,
         }
+    }
+
+    /// Reset the target using either the selected core or the probe-level reset for AVR.
+    pub fn reset(&mut self, core_index: usize) -> Result<(), Error> {
+        match &mut self.interfaces {
+            ArchitectureInterface::Avr(probe) => probe.target_reset().map_err(Error::from),
+            _ => self.core(core_index)?.reset(),
+        }
+    }
+
+    /// Reset and halt the selected core when the architecture supports it.
+    pub fn reset_and_halt(&mut self, core_index: usize, timeout: Duration) -> Result<(), Error> {
+        match &mut self.interfaces {
+            ArchitectureInterface::Avr(_) => Err(Error::NotImplemented("AVR reset-and-halt")),
+            _ => {
+                self.core(core_index)?.reset_and_halt(timeout)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Read raw bytes either through a debuggable core or, for AVR, from a selected narrow memory region.
+    pub fn read_memory(
+        &mut self,
+        core_index: usize,
+        address: u64,
+        width_bytes: usize,
+        count: usize,
+        region: Option<AvrMemoryRegion>,
+    ) -> Result<Vec<u8>, Error> {
+        match &mut self.interfaces {
+            ArchitectureInterface::Avr(probe) => {
+                let region = region.ok_or(Error::NotImplemented("AVR region-aware memory read"))?;
+                let byte_len = count
+                    .checked_mul(width_bytes)
+                    .ok_or_else(|| Error::Other("requested read length overflowed".to_string()))?;
+                let byte_len = u32::try_from(byte_len).map_err(|_| {
+                    Error::Other("requested read length exceeds 32-bit range".to_string())
+                })?;
+                let offset = u32::try_from(address).map_err(|_| {
+                    Error::Other("region-relative AVR address exceeds 32-bit range".to_string())
+                })?;
+                let cmsis = probe
+                    .try_into::<CmsisDap>()
+                    .ok_or(Error::NotImplemented("AVR CMSIS-DAP session read"))?;
+                read_attached_pkobn_updi_m4809_region(cmsis, region, offset, byte_len)
+                    .map_err(Error::from)
+            }
+            _ => {
+                let mut core = self.core(core_index)?;
+                match width_bytes {
+                    1 => {
+                        let mut values = vec![0u8; count];
+                        core.read_8(address, &mut values)?;
+                        Ok(values)
+                    }
+                    2 => {
+                        let mut values = vec![0u16; count];
+                        core.read_16(address, &mut values)?;
+                        Ok(values.into_iter().flat_map(|v| v.to_le_bytes()).collect())
+                    }
+                    4 => {
+                        let mut values = vec![0u32; count];
+                        core.read_32(address, &mut values)?;
+                        Ok(values.into_iter().flat_map(|v| v.to_le_bytes()).collect())
+                    }
+                    8 => {
+                        let mut values = vec![0u64; count];
+                        core.read_64(address, &mut values)?;
+                        Ok(values.into_iter().flat_map(|v| v.to_le_bytes()).collect())
+                    }
+                    _ => Err(Error::Other(format!(
+                        "unsupported read width {width_bytes}"
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// Write raw bytes either through a debuggable core or, for AVR, into flash via a selected
+    /// narrow programmer memory region.
+    pub fn write_memory(
+        &mut self,
+        core_index: usize,
+        address: u64,
+        width_bytes: usize,
+        data: &[u8],
+        region: Option<AvrMemoryRegion>,
+    ) -> Result<(), Error> {
+        match &mut self.interfaces {
+            ArchitectureInterface::Avr(probe) => {
+                let region =
+                    region.ok_or(Error::NotImplemented("AVR region-aware memory write"))?;
+                if region != AvrMemoryRegion::Flash {
+                    return Err(Error::NotImplemented(
+                        "AVR writes currently only support flash",
+                    ));
+                }
+                let offset = u32::try_from(address).map_err(|_| {
+                    Error::Other("region-relative AVR address exceeds 32-bit range".to_string())
+                })?;
+                let cmsis = probe
+                    .try_into::<CmsisDap>()
+                    .ok_or(Error::NotImplemented("AVR CMSIS-DAP session write"))?;
+                write_attached_pkobn_updi_m4809_flash(cmsis, offset, data).map_err(Error::from)
+            }
+            _ => {
+                let mut core = self.core(core_index)?;
+                match width_bytes {
+                    1 => core.write_8(address, data).map_err(Error::from),
+                    2 => {
+                        let words = Self::decode_words_u16(data)?;
+                        core.write_16(address, &words).map_err(Error::from)
+                    }
+                    4 => {
+                        let words = Self::decode_words_u32(data)?;
+                        core.write_32(address, &words).map_err(Error::from)
+                    }
+                    8 => {
+                        let words = Self::decode_words_u64(data)?;
+                        core.write_64(address, &words).map_err(Error::from)
+                    }
+                    other => Err(Error::Other(format!("unsupported write width {other}"))),
+                }
+            }
+        }
+    }
+
+    fn decode_words_u16(bytes: &[u8]) -> Result<Vec<u16>, Error> {
+        if !bytes.len().is_multiple_of(2) {
+            return Err(Error::Other(
+                "write data length is not aligned to 16-bit width".to_string(),
+            ));
+        }
+        Ok(bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect())
+    }
+
+    fn decode_words_u32(bytes: &[u8]) -> Result<Vec<u32>, Error> {
+        if !bytes.len().is_multiple_of(4) {
+            return Err(Error::Other(
+                "write data length is not aligned to 32-bit width".to_string(),
+            ));
+        }
+        Ok(bytes
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect())
+    }
+
+    fn decode_words_u64(bytes: &[u8]) -> Result<Vec<u64>, Error> {
+        if !bytes.len().is_multiple_of(8) {
+            return Err(Error::Other(
+                "write data length is not aligned to 64-bit width".to_string(),
+            ));
+        }
+        Ok(bytes
+            .chunks_exact(8)
+            .map(|chunk| {
+                u64::from_le_bytes([
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                ])
+            })
+            .collect())
     }
 
     /// Clears all hardware breakpoints on all cores

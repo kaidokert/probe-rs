@@ -17,9 +17,11 @@ use crate::{
             XtensaCommunicationInterface, XtensaDebugInterfaceState,
         },
     },
-    config::{ChipInfo, DebugSequence, Registry},
-    probe::Probe,
+    config::{ChipInfo, Core, CoreType, DebugSequence, Registry, TargetDescriptionSource},
+    probe::{Probe, WireProtocol},
+    rtt::ScanRegion,
 };
+use probe_rs_target::CoreAccessOptions;
 
 pub mod amd;
 pub mod holtek;
@@ -288,6 +290,28 @@ pub(crate) fn auto_determine_target(
 ) -> Result<(Probe, Option<Target>), Error> {
     tracing::info!("Auto-detecting target");
     let mut found_target = None;
+
+    if probe.protocol() == Some(WireProtocol::Updi) {
+        let target = Target {
+            name: "ATmega4809".to_string(),
+            cores: vec![Core {
+                name: "main".to_string(),
+                core_type: CoreType::AVR,
+                core_access_options: CoreAccessOptions::AVR,
+            }],
+            flash_algorithms: vec![],
+            memory_map: vec![],
+            source: TargetDescriptionSource::Generic,
+            debug_sequence: DebugSequence::Avr(()),
+            rtt_scan_regions: ScanRegion::Ram,
+            jtag: None,
+            default_format: None,
+        };
+
+        tracing::info!("Found target: {}", target.name);
+        probe.detach()?;
+        return Ok((probe, Some(target)));
+    }
 
     // Xtensa and RISC-V interfaces don't need moving the probe. For clarity, their
     // handlers work with the borrowed probe, and we use these wrappers to adapt to the

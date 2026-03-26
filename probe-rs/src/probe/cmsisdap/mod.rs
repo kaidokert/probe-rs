@@ -1,6 +1,12 @@
 //! CMSIS-DAP probe implementation.
 mod commands;
 mod tools;
+pub use self::commands::edbg_avr::{
+    AvrMemoryRegion, IceFirmwareVersion, PkobnUpdiM4809Info, erase_attached_pkobn_updi_m4809,
+    erase_pkobn_updi_m4809, query_pkobn_updi_m4809, read_attached_pkobn_updi_m4809_region,
+    read_pkobn_updi_m4809_region, reset_pkobn_updi_m4809, write_attached_pkobn_updi_m4809_flash,
+    write_pkobn_updi_m4809_flash,
+};
 
 use crate::{
     CoreStatus,
@@ -770,14 +776,26 @@ impl CmsisDap {
             return Ok(());
         }
 
-        let protocol: ConnectRequest = if let Some(protocol) = self.protocol {
-            match protocol {
-                WireProtocol::Swd => ConnectRequest::Swd,
-                WireProtocol::Jtag => ConnectRequest::Jtag,
+        if self.protocol == Some(WireProtocol::Updi) {
+            match commands::send_command(&mut self.device, &ConnectRequest::Swd)? {
+                ConnectResponse::SuccessfulInitForSWD => {}
+                ConnectResponse::SuccessfulInitForJTAG | ConnectResponse::InitFailed => {
+                    return Err(CmsisDapError::ErrorResponse(RequestError::InitFailed {
+                        protocol: self.protocol,
+                    })
+                    .into());
+                }
             }
-        } else {
-            ConnectRequest::DefaultPort
-        };
+
+            let _: Result<HostStatusResponse, _> =
+                commands::send_command(&mut self.device, &HostStatusRequest::connected(true));
+
+            tracing::info!("Using protocol {}", WireProtocol::Updi);
+            self.connected = true;
+            return Ok(());
+        }
+
+        let protocol = connect_request_for(self.protocol, self.capabilities);
 
         let used_protocol =
             commands::send_command(&mut self.device, &protocol).and_then(|v| match v {
@@ -937,6 +955,10 @@ impl DebugProbe for CmsisDap {
         // Run connect sequence (may already be done earlier via swj operations)
         self.connect_if_needed()?;
 
+        if self.active_protocol() == Some(WireProtocol::Updi) {
+            return Ok(());
+        }
+
         // Set speed after connecting as it can be reset during protocol selection
         self.set_speed(self.speed_khz)?;
 
@@ -996,6 +1018,10 @@ impl DebugProbe for CmsisDap {
             }
             WireProtocol::Swd if self.capabilities.swd_implemented => {
                 self.protocol = Some(WireProtocol::Swd);
+                Ok(())
+            }
+            WireProtocol::Updi => {
+                self.protocol = Some(WireProtocol::Updi);
                 Ok(())
             }
             _ => Err(DebugProbeError::UnsupportedProtocol(protocol)),
@@ -1412,5 +1438,58 @@ impl From<ScanChainError> for CmsisDapError {
             ScanChainError::InvalidIdCode => CmsisDapError::InvalidIdCode,
             ScanChainError::InvalidIR => CmsisDapError::InvalidIR,
         }
+    }
+}
+
+fn connect_request_for(
+    protocol: Option<WireProtocol>,
+    capabilities: Capabilities,
+) -> ConnectRequest {
+    match protocol {
+        Some(WireProtocol::Swd) => ConnectRequest::Swd,
+        Some(WireProtocol::Jtag) => ConnectRequest::Jtag,
+        Some(WireProtocol::Updi) => ConnectRequest::DefaultPort,
+        None if capabilities.swd_implemented && !capabilities.jtag_implemented => {
+            ConnectRequest::Swd
+        }
+        None if capabilities.jtag_implemented && !capabilities.swd_implemented => {
+            ConnectRequest::Jtag
+        }
+        None => ConnectRequest::DefaultPort,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capabilities(swd_implemented: bool, jtag_implemented: bool) -> Capabilities {
+        Capabilities {
+            swd_implemented,
+            jtag_implemented,
+            swo_uart_implemented: false,
+            swo_manchester_implemented: false,
+            _atomic_commands_implemented: false,
+            _test_domain_timer_implemented: false,
+            swo_streaming_trace_implemented: false,
+            _uart_communication_port_implemented: false,
+            _usb_com_port_implemented: false,
+        }
+    }
+
+    #[test]
+    fn prefers_only_supported_transport_when_protocol_unspecified() {
+        assert!(matches!(
+            connect_request_for(None, capabilities(true, false)),
+            ConnectRequest::Swd
+        ));
+    }
+
+    #[test]
+    fn keeps_default_port_when_probe_supports_multiple_transports() {
+        assert!(matches!(
+            connect_request_for(None, capabilities(true, true)),
+            ConnectRequest::DefaultPort
+        ));
     }
 }

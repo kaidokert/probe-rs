@@ -1,6 +1,6 @@
 use std::{fmt::Display, num::ParseIntError};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use jep106::JEP106Code;
 use probe_rs::{
     architecture::arm::{
@@ -19,7 +19,10 @@ use crate::{
             InfoEvent, MinDpSupport, TargetInfoRequest,
         },
     },
-    util::{cli::select_probe, common_options::ProbeOptions},
+    util::{
+        cli::select_probe,
+        common_options::ProbeOptions,
+    },
 };
 
 const JEP_ARM: JEP106Code = JEP106Code::new(4, 0x3b);
@@ -42,10 +45,14 @@ fn parse_hex(src: &str) -> Result<u32, ParseIntError> {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        let protocols = if let Some(protocol) = self.common.protocol {
-            vec![protocol]
-        } else {
-            vec![WireProtocol::Jtag, WireProtocol::Swd]
+        let mut had_success = false;
+        let mut last_error = None;
+
+        let protocols = match self.common.protocol {
+            Some(WireProtocol::Jtag) => vec![WireProtocol::Jtag],
+            Some(WireProtocol::Swd) => vec![WireProtocol::Swd],
+            Some(WireProtocol::Updi) => vec![WireProtocol::Updi],
+            None => vec![WireProtocol::Jtag, WireProtocol::Swd, WireProtocol::Updi],
         };
 
         let probe = select_probe(&client, self.common.probe.map(Into::into)).await?;
@@ -88,6 +95,7 @@ impl Cmd {
                 .await;
 
             if let Err(error) = result {
+                last_error = Some(anyhow!("{error}"));
                 println!("Error while probing target: {error}");
             }
 
@@ -96,13 +104,20 @@ impl Cmd {
                     println!("{message}");
                 }
             } else {
+                had_success = true;
                 for message in successes {
                     println!("{message}");
                 }
             }
         }
 
-        Ok(())
+        if had_success {
+            Ok(())
+        } else if let Some(error) = last_error {
+            Err(error)
+        } else {
+            Err(anyhow!("probing target produced no successful results"))
+        }
     }
 }
 

@@ -7,9 +7,7 @@ use probe_rs::{
     config::{Registry, RegistryError, TargetSelector},
     flashing::{FileDownloadError, FlashError},
     integration::FakeProbe,
-    probe::{
-        DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe, WireProtocol, list::Lister,
-    },
+    probe::{DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe, WireProtocol, list::Lister},
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +70,17 @@ pub enum ReadWriteBitWidth {
     B64 = 64,
 }
 
+impl ReadWriteBitWidth {
+    pub fn byte_width(self) -> usize {
+        match self {
+            ReadWriteBitWidth::B8 => 1,
+            ReadWriteBitWidth::B16 => 2,
+            ReadWriteBitWidth::B32 => 4,
+            ReadWriteBitWidth::B64 => 8,
+        }
+    }
+}
+
 /// Common options for read/write operations to a target device.
 #[derive(Debug, clap::Parser)]
 pub struct ReadWriteOptions {
@@ -84,7 +93,6 @@ pub struct ReadWriteOptions {
     pub address: u64,
 }
 
-/// Common options and logic when interfacing with a [Probe].
 #[derive(clap::Parser, Clone, Debug, Serialize, Deserialize)]
 pub struct ProbeOptions {
     #[arg(long, env = "PROBE_RS_CHIP", help_heading = "PROBE CONFIGURATION")]
@@ -97,7 +105,7 @@ pub struct ProbeOptions {
     )]
     pub chip_description_path: Option<PathBuf>,
 
-    /// Protocol used to connect to chip. Possible options: [swd, jtag]
+    /// Protocol used to connect to chip. Possible options: [swd, jtag, updi]
     #[arg(long, env = "PROBE_RS_PROTOCOL", help_heading = "PROBE CONFIGURATION")]
     pub protocol: Option<WireProtocol>,
 

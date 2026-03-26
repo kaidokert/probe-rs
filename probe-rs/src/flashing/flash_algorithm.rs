@@ -243,6 +243,7 @@ impl FlashAlgorithm {
             },
             CoreType::Riscv => &Self::RISCV_FLASH_BLOB_HEADER,
             CoreType::Xtensa => &Self::XTENSA_FLASH_BLOB_HEADER,
+            CoreType::AVR => &[], // TODO: Add AVR flash blob header when needed.
         }
     }
 
@@ -251,6 +252,7 @@ impl FlashAlgorithm {
             Architecture::Arm => 8,
             Architecture::Riscv => 16,
             Architecture::Xtensa => 16,
+            Architecture::AVR => 8,
         }
     }
 

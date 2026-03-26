@@ -28,8 +28,7 @@ pub async fn reset(
     request: ResetCoreRequest,
 ) -> NoResponse {
     let mut session = ctx.session(request.sessid).await;
-    let mut core = session.core(request.core as usize)?;
-    core.reset()?;
+    session.reset(request.core as usize)?;
     Ok(())
 }
 
@@ -39,7 +38,6 @@ pub async fn reset_and_halt(
     request: ResetCoreAndHaltRequest,
 ) -> NoResponse {
     let mut session = ctx.session(request.sessid).await;
-    let mut core = session.core(request.core as usize)?;
-    core.reset_and_halt(request.timeout)?;
+    session.reset_and_halt(request.core as usize, request.timeout)?;
     Ok(())
 }

@@ -169,6 +169,8 @@ pub enum CoreAccessOptions {
     Riscv(RiscvCoreAccessOptions),
     /// Xtensa specific options
     Xtensa(XtensaCoreAccessOptions),
+    /// AVR specific options
+    AVR, // TODO: Add AVR core access options when needed.
 }
 
 /// An address for AP accesses
