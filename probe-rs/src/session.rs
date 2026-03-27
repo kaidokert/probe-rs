@@ -1026,18 +1026,18 @@ impl Session {
             _ => {
                 let mut core = self.core(core_index)?;
                 match width_bytes {
-                    1 => core.write_8(address, data).map_err(Error::from),
+                    1 => core.write_8(address, data),
                     2 => {
                         let words = Self::decode_words_u16(data)?;
-                        core.write_16(address, &words).map_err(Error::from)
+                        core.write_16(address, &words)
                     }
                     4 => {
                         let words = Self::decode_words_u32(data)?;
-                        core.write_32(address, &words).map_err(Error::from)
+                        core.write_32(address, &words)
                     }
                     8 => {
                         let words = Self::decode_words_u64(data)?;
-                        core.write_64(address, &words).map_err(Error::from)
+                        core.write_64(address, &words)
                     }
                     other => Err(Error::Other(format!("unsupported write width {other}"))),
                 }
