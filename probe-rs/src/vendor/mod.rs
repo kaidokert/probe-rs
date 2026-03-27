@@ -17,12 +17,10 @@ use crate::{
             XtensaCommunicationInterface, XtensaDebugInterfaceState,
         },
     },
-    config::{ChipInfo, Core, CoreType, DebugSequence, Registry, TargetDescriptionSource},
+    config::{ChipInfo, DebugSequence, Registry, TargetDescriptionSource},
     probe::{Probe, WireProtocol},
     rtt::ScanRegion,
 };
-use probe_rs_target::CoreAccessOptions;
-
 pub mod amd;
 pub mod holtek;
 pub mod infineon;
@@ -294,11 +292,7 @@ pub(crate) fn auto_determine_target(
     if probe.protocol() == Some(WireProtocol::Updi) {
         let target = Target {
             name: "ATmega4809".to_string(),
-            cores: vec![Core {
-                name: "main".to_string(),
-                core_type: CoreType::AVR,
-                core_access_options: CoreAccessOptions::AVR,
-            }],
+            cores: vec![],
             flash_algorithms: vec![],
             memory_map: vec![],
             source: TargetDescriptionSource::Generic,

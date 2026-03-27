@@ -144,6 +144,15 @@ impl Target {
 
     /// Get the architecture of the target
     pub fn architecture(&self) -> Architecture {
+        if self.cores.is_empty() {
+            return match self.debug_sequence {
+                DebugSequence::Arm(_) => Architecture::Arm,
+                DebugSequence::Riscv(_) => Architecture::Riscv,
+                DebugSequence::Xtensa(_) => Architecture::Xtensa,
+                DebugSequence::Avr(_) => Architecture::AVR,
+            };
+        }
+
         let target_arch = self.cores[0].core_type.architecture();
 
         // This should be ensured when a `ChipFamily` is loaded.

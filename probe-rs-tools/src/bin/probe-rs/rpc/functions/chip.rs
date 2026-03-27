@@ -170,7 +170,6 @@ impl From<probe_rs_target::CoreType> for CoreType {
             probe_rs_target::CoreType::Armv8m => CoreType::Armv8m,
             probe_rs_target::CoreType::Riscv => CoreType::Riscv,
             probe_rs_target::CoreType::Xtensa => CoreType::Xtensa,
-            probe_rs_target::CoreType::AVR => CoreType::AVR, // TODO: Add AVR core type when needed.
         }
     }
 }

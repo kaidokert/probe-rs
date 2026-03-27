@@ -47,8 +47,6 @@ pub enum CoreType {
     Riscv,
     /// Xtensa - TODO: may need to split into NX, LX6 and LX7
     Xtensa,
-    /// AVR
-    AVR, // TODO: Add AVR core type when needed.
 }
 
 impl CoreType {
@@ -85,7 +83,6 @@ impl CoreType {
         match self {
             CoreType::Riscv => Architecture::Riscv,
             CoreType::Xtensa => Architecture::Xtensa,
-            CoreType::AVR => Architecture::AVR,
             _ => Architecture::Arm,
         }
     }
