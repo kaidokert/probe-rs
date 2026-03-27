@@ -70,7 +70,7 @@ pub async fn write_memory<W: Word + 'static>(
     request: WriteMemoryRequest<W>,
 ) -> NoResponse {
     let mut session = ctx.session(request.sessid).await;
-    if session.architecture() == probe_rs::Architecture::AVR {
+    if session.architecture() == probe_rs::Architecture::Avr {
         session.write_memory(
             request.core as usize,
             request.address,

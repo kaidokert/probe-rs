@@ -118,7 +118,7 @@ impl Target {
                 Architecture::Arm => DebugSequence::Arm(DefaultArmSequence::create()),
                 Architecture::Riscv => DebugSequence::Riscv(DefaultRiscvSequence::create()),
                 Architecture::Xtensa => DebugSequence::Xtensa(DefaultXtensaSequence::create()),
-                Architecture::AVR => DebugSequence::Avr(()),
+                Architecture::Avr => DebugSequence::Avr(()),
             }
         });
 
@@ -149,7 +149,7 @@ impl Target {
                 DebugSequence::Arm(_) => Architecture::Arm,
                 DebugSequence::Riscv(_) => Architecture::Riscv,
                 DebugSequence::Xtensa(_) => Architecture::Xtensa,
-                DebugSequence::Avr(_) => Architecture::AVR,
+                DebugSequence::Avr(_) => Architecture::Avr,
             };
         }
 

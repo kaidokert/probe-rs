@@ -98,7 +98,7 @@ pub enum Architecture {
     /// An Xtensa core.
     Xtensa,
     /// An AVR core.
-    AVR,
+    Avr,
 }
 
 /// Instruction set used by a core

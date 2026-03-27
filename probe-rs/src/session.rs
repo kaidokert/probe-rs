@@ -169,7 +169,7 @@ impl Session {
         let (probe, target) = get_target_from_selector(target, attach_method, probe, registry)?;
         let architecture = target.architecture();
 
-        let cores = if architecture == Architecture::AVR {
+        let cores = if architecture == Architecture::Avr {
             Vec::new()
         } else {
             target
@@ -194,7 +194,7 @@ impl Session {
             Architecture::Riscv | Architecture::Xtensa => {
                 Self::attach_jtag(probe, target, attach_method, permissions, cores)?
             }
-            Architecture::AVR => Self::attach_avr_stub(probe, target)?,
+            Architecture::Avr => Self::attach_avr_stub(probe, target)?,
         };
 
         session.clear_all_hw_breakpoints()?;
@@ -915,7 +915,7 @@ impl Session {
                     Architecture::Xtensa
                 }
             }
-            ArchitectureInterface::Avr(_) => Architecture::AVR,
+            ArchitectureInterface::Avr(_) => Architecture::Avr,
         }
     }
 
