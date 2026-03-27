@@ -7,8 +7,9 @@ use crate::rpc::client::RpcClient;
 use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
 
 use crate::util::cli;
-use crate::util::common_options::{BinaryDownloadOptions, CliProtocol, ProbeOptions};
+use crate::util::common_options::{BinaryDownloadOptions, ProbeOptions};
 use crate::{FormatKind, FormatOptions};
+use probe_rs::probe::WireProtocol;
 
 #[derive(clap::Parser)]
 pub struct Cmd {
@@ -27,7 +28,7 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        if self.probe_options.protocol == Some(CliProtocol::Updi) {
+        if self.probe_options.protocol == Some(WireProtocol::Updi) {
             self.run_updi_download(&client).await?;
         } else {
             let session = cli::attach_probe(&client, self.probe_options, false).await?;

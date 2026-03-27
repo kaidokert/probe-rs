@@ -42,7 +42,7 @@ use crate::{
         },
     },
     util::{
-        common_options::{BinaryDownloadOptions, CliProtocol, ProbeOptions},
+        common_options::{BinaryDownloadOptions, ProbeOptions},
         flash::CliProgressBars,
         logging,
         rtt::{
@@ -78,17 +78,11 @@ pub async fn attach_probe(
     }
 
     let probe = select_probe(client, probe_options.probe.map(Into::into)).await?;
-    let protocol = match probe_options.protocol {
-        Some(CliProtocol::Swd) => Some(crate::rpc::functions::probe::WireProtocol::Swd),
-        Some(CliProtocol::Jtag) => Some(crate::rpc::functions::probe::WireProtocol::Jtag),
-        Some(CliProtocol::Updi) => Some(crate::rpc::functions::probe::WireProtocol::Updi),
-        None => None,
-    };
 
     let result = client
         .attach_probe(AttachRequest {
             chip: probe_options.chip,
-            protocol,
+            protocol: probe_options.protocol.map(Into::into),
             probe,
             speed: probe_options.speed,
             connect_under_reset: probe_options.connect_under_reset,

@@ -7,9 +7,9 @@ use crate::rpc::client::RpcClient;
 use crate::rpc::functions::flash::VerifyResult;
 use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
 use crate::util::cli;
-use crate::util::common_options::CliProtocol;
 use crate::util::common_options::ProbeOptions;
 use crate::util::flash::CliProgressBars;
+use probe_rs::probe::WireProtocol;
 
 use super::download::load_updi_flash_blocks;
 
@@ -34,7 +34,7 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        if self.probe_options.protocol == Some(CliProtocol::Updi) {
+        if self.probe_options.protocol == Some(WireProtocol::Updi) {
             self.run_updi_verify(&client).await
         } else {
             let session = cli::attach_probe(&client, self.probe_options, false).await?;

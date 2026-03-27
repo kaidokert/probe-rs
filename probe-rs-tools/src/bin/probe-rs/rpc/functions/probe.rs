@@ -8,7 +8,7 @@ use crate::{
         Key,
         functions::{RpcContext, RpcResult},
     },
-    util::common_options::{CliProtocol, OperationError, ProbeOptions},
+    util::common_options::{OperationError, ProbeOptions},
 };
 
 use std::fmt::Display;
@@ -224,11 +224,7 @@ impl From<&AttachRequest> for ProbeOptions {
         ProbeOptions {
             chip: request.chip.clone(),
             chip_description_path: None,
-            protocol: request.protocol.map(|protocol| match protocol {
-                WireProtocol::Jtag => CliProtocol::Jtag,
-                WireProtocol::Swd => CliProtocol::Swd,
-                WireProtocol::Updi => CliProtocol::Updi,
-            }),
+            protocol: request.protocol.map(Into::into),
             non_interactive: true,
             probe: Some(request.probe.selector().into()),
             speed: request.speed,

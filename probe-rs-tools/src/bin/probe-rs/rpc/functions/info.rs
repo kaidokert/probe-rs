@@ -34,7 +34,7 @@ use crate::{
         chip::JEP106Code,
         probe::{DebugProbeEntry, WireProtocol},
     },
-    util::common_options::{CliProtocol, ProbeOptions},
+    util::common_options::ProbeOptions,
 };
 
 #[derive(Serialize, Deserialize, Schema)]
@@ -52,11 +52,7 @@ impl From<&TargetInfoRequest> for ProbeOptions {
         ProbeOptions {
             chip: None,
             chip_description_path: None,
-            protocol: match request.protocol {
-                WireProtocol::Jtag => Some(CliProtocol::Jtag),
-                WireProtocol::Swd => Some(CliProtocol::Swd),
-                WireProtocol::Updi => Some(CliProtocol::Updi),
-            },
+            protocol: Some(request.protocol.into()),
             non_interactive: true,
             probe: Some(request.probe.selector().into()),
             speed: request.speed,

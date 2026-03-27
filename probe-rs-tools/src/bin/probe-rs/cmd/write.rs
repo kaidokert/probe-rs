@@ -2,8 +2,9 @@ use crate::rpc::client::RpcClient;
 
 use crate::CoreOptions;
 use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
-use crate::util::common_options::{CliProtocol, ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
+use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
 use crate::util::{cli, parse_u64};
+use probe_rs::probe::WireProtocol;
 
 /// Write to target memory address
 ///
@@ -58,7 +59,7 @@ impl Cmd {
         let protocol = self.probe_options.protocol;
         let session = cli::attach_probe(&client, self.probe_options, false).await?;
         let core = session.core(self.shared.core);
-        let region = if protocol == Some(CliProtocol::Updi) {
+        let region = if protocol == Some(WireProtocol::Updi) {
             Some(RpcAvrMemoryRegion::Flash)
         } else {
             None

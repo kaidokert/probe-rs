@@ -21,7 +21,7 @@ use crate::{
     },
     util::{
         cli::select_probe,
-        common_options::{CliProtocol, ProbeOptions},
+        common_options::ProbeOptions,
     },
 };
 
@@ -49,9 +49,9 @@ impl Cmd {
         let mut last_error = None;
 
         let protocols = match self.common.protocol {
-            Some(CliProtocol::Jtag) => vec![WireProtocol::Jtag],
-            Some(CliProtocol::Swd) => vec![WireProtocol::Swd],
-            Some(CliProtocol::Updi) => vec![WireProtocol::Updi],
+            Some(WireProtocol::Jtag) => vec![WireProtocol::Jtag],
+            Some(WireProtocol::Swd) => vec![WireProtocol::Swd],
+            Some(WireProtocol::Updi) => vec![WireProtocol::Updi],
             None => vec![WireProtocol::Jtag, WireProtocol::Swd, WireProtocol::Updi],
         };
 

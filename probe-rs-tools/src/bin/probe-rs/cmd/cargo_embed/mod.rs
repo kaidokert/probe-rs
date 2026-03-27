@@ -219,11 +219,7 @@ async fn main_try(args: Vec<OsString>, config: Config, offset: UtcOffset) -> Res
     let probe_options = ProbeOptions {
         chip,
         chip_description_path: None,
-        protocol: Some(match config.probe.protocol {
-            probe_rs::probe::WireProtocol::Swd => crate::util::common_options::CliProtocol::Swd,
-            probe_rs::probe::WireProtocol::Jtag => crate::util::common_options::CliProtocol::Jtag,
-            probe_rs::probe::WireProtocol::Updi => crate::util::common_options::CliProtocol::Updi,
-        }),
+        protocol: Some(config.probe.protocol),
         non_interactive: false,
         probe: selector,
         speed: config.probe.speed,

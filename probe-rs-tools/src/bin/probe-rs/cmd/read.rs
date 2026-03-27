@@ -6,6 +6,7 @@ use crate::rpc::{
 use crate::util::cli;
 use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
 use crate::util::read_output::OutputFormat;
+use probe_rs::probe::WireProtocol;
 use std::path::PathBuf;
 
 /// Read from target memory address
@@ -86,18 +87,14 @@ impl From<UpdiRegion> for RpcAvrMemoryRegion {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        if self.region.is_some()
-            && self.probe_options.protocol != Some(crate::util::common_options::CliProtocol::Updi)
-        {
+        if self.region.is_some() && self.probe_options.protocol != Some(WireProtocol::Updi) {
             anyhow::bail!("The option '--region' is only supported with '--protocol updi'.");
         }
 
         let session = cli::attach_probe(&client, self.probe_options.clone(), false).await?;
         let core = session.core(self.shared.core);
 
-        let region = if self.probe_options.protocol
-            == Some(crate::util::common_options::CliProtocol::Updi)
-        {
+        let region = if self.probe_options.protocol == Some(WireProtocol::Updi) {
             Some(self.region.unwrap_or(UpdiRegion::Flash).into())
         } else {
             None
@@ -112,7 +109,7 @@ impl Cmd {
         )
         .await?;
 
-        if self.probe_options.protocol != Some(crate::util::common_options::CliProtocol::Updi) {
+        if self.probe_options.protocol != Some(WireProtocol::Updi) {
             session.resume_all_cores().await?;
         }
 

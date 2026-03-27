@@ -373,10 +373,10 @@ impl Cmd {
         // Determine if this is a launch or attach session
         let session_command = if self.launch { "launch" } else { "attach" };
         let wire_protocol = match self.common.protocol {
-            Some(protocol) => match protocol.as_probe_rs_wire_protocol() {
-                Some(protocol) => Some(protocol),
-                None => anyhow::bail!("The protocol 'UPDI' is not supported by this command."),
-            },
+            Some(probe_rs::probe::WireProtocol::Updi) => {
+                anyhow::bail!("The protocol 'UPDI' is not supported by this command.")
+            }
+            Some(protocol) => Some(protocol),
             None => None,
         };
 
