@@ -305,7 +305,6 @@ impl CoreExt for Core {
             }
             probe_rs_target::CoreAccessOptions::Riscv(_) => None,
             probe_rs_target::CoreAccessOptions::Xtensa(_) => None,
-            probe_rs_target::CoreAccessOptions::AVR => None, // TODO: Add AVR core access options when needed.
         }
     }
 }

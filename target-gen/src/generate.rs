@@ -220,7 +220,6 @@ fn create_core(processor: &Processor) -> Result<ProbeCore> {
             Architecture::Xtensa => {
                 CoreAccessOptions::Xtensa(XtensaCoreAccessOptions { jtag_tap: None })
             }
-            Architecture::AVR => CoreAccessOptions::AVR, // TODO: Add AVR core access options when needed.
         },
     })
 }
