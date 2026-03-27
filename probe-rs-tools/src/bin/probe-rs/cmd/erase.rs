@@ -1,10 +1,6 @@
 use crate::{
     rpc::{client::RpcClient, functions::flash::EraseCommand},
-    util::{
-        cli,
-        common_options::ProbeOptions,
-        flash::CliProgressBars,
-    },
+    util::{cli, common_options::ProbeOptions, flash::CliProgressBars},
 };
 use probe_rs::probe::WireProtocol;
 

@@ -7,7 +7,9 @@ use probe_rs::{
     config::{Registry, RegistryError, TargetSelector},
     flashing::{FileDownloadError, FlashError},
     integration::FakeProbe,
-    probe::{DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe, WireProtocol, list::Lister},
+    probe::{
+        DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe, WireProtocol, list::Lister,
+    },
 };
 use serde::{Deserialize, Serialize};
 

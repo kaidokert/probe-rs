@@ -19,10 +19,7 @@ use crate::{
             InfoEvent, MinDpSupport, TargetInfoRequest,
         },
     },
-    util::{
-        cli::select_probe,
-        common_options::ProbeOptions,
-    },
+    util::{cli::select_probe, common_options::ProbeOptions},
 };
 
 const JEP_ARM: JEP106Code = JEP106Code::new(4, 0x3b);

@@ -220,6 +220,9 @@ fn create_core(processor: &Processor) -> Result<ProbeCore> {
             Architecture::Xtensa => {
                 CoreAccessOptions::Xtensa(XtensaCoreAccessOptions { jtag_tap: None })
             }
+            Architecture::AVR => {
+                unreachable!("target-gen does not generate AVR cores")
+            }
         },
     })
 }
