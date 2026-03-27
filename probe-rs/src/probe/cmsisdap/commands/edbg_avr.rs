@@ -1076,6 +1076,7 @@ impl<'a> EdbgAvrTransport<'a> {
         tx[1..1 + payload.len()].copy_from_slice(payload);
 
         let write_len = match self.device.as_ref() {
+            #[cfg(feature = "cmsisdap_v1")]
             CmsisDapDevice::V1 { .. } => buffer_len,
             CmsisDapDevice::V2 { .. } => payload.len() + 1,
         };
@@ -1089,6 +1090,7 @@ impl<'a> EdbgAvrTransport<'a> {
 
     fn packet_size(&self) -> usize {
         match self.device.as_ref() {
+            #[cfg(feature = "cmsisdap_v1")]
             CmsisDapDevice::V1 { report_size, .. } => *report_size,
             CmsisDapDevice::V2 {
                 max_packet_size, ..
