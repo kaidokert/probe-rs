@@ -166,6 +166,7 @@ impl SessionConfig {
             protocol: self.wire_protocol.map(|protocol| match protocol {
                 WireProtocol::Swd => crate::util::common_options::CliProtocol::Swd,
                 WireProtocol::Jtag => crate::util::common_options::CliProtocol::Jtag,
+                WireProtocol::Updi => crate::util::common_options::CliProtocol::Updi,
             }),
             non_interactive: true,
             probe: self.probe.clone(),

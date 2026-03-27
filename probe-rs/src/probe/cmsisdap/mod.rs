@@ -2,8 +2,9 @@
 mod commands;
 mod tools;
 pub use self::commands::edbg_avr::{
-    AvrMemoryRegion, IceFirmwareVersion, PkobnUpdiM4809Info, erase_pkobn_updi_m4809,
-    query_pkobn_updi_m4809, read_pkobn_updi_m4809_region, reset_pkobn_updi_m4809,
+    AvrMemoryRegion, IceFirmwareVersion, PkobnUpdiM4809Info, erase_attached_pkobn_updi_m4809,
+    erase_pkobn_updi_m4809, query_pkobn_updi_m4809, read_attached_pkobn_updi_m4809_region,
+    read_pkobn_updi_m4809_region, reset_pkobn_updi_m4809, write_attached_pkobn_updi_m4809_flash,
     write_pkobn_updi_m4809_flash,
 };
 
@@ -779,6 +780,25 @@ impl CmsisDap {
             return Ok(());
         }
 
+        if self.protocol == Some(WireProtocol::Updi) {
+            match commands::send_command(&mut self.device, &ConnectRequest::Swd)? {
+                ConnectResponse::SuccessfulInitForSWD => {}
+                ConnectResponse::SuccessfulInitForJTAG | ConnectResponse::InitFailed => {
+                    return Err(CmsisDapError::ErrorResponse(RequestError::InitFailed {
+                        protocol: self.protocol,
+                    })
+                    .into());
+                }
+            }
+
+            let _: Result<HostStatusResponse, _> =
+                commands::send_command(&mut self.device, &HostStatusRequest::connected(true));
+
+            tracing::info!("Using protocol {}", WireProtocol::Updi);
+            self.connected = true;
+            return Ok(());
+        }
+
         let protocol = self.connect_request();
 
         let used_protocol =
@@ -939,6 +959,10 @@ impl DebugProbe for CmsisDap {
         // Run connect sequence (may already be done earlier via swj operations)
         self.connect_if_needed()?;
 
+        if self.active_protocol() == Some(WireProtocol::Updi) {
+            return Ok(());
+        }
+
         // Set speed after connecting as it can be reset during protocol selection
         self.set_speed(self.speed_khz)?;
 
@@ -998,6 +1022,10 @@ impl DebugProbe for CmsisDap {
             }
             WireProtocol::Swd if self.capabilities.swd_implemented => {
                 self.protocol = Some(WireProtocol::Swd);
+                Ok(())
+            }
+            WireProtocol::Updi => {
+                self.protocol = Some(WireProtocol::Updi);
                 Ok(())
             }
             _ => Err(DebugProbeError::UnsupportedProtocol(protocol)),
@@ -1424,6 +1452,7 @@ fn connect_request_for(
     match protocol {
         Some(WireProtocol::Swd) => ConnectRequest::Swd,
         Some(WireProtocol::Jtag) => ConnectRequest::Jtag,
+        Some(WireProtocol::Updi) => ConnectRequest::DefaultPort,
         None if capabilities.swd_implemented && !capabilities.jtag_implemented => {
             ConnectRequest::Swd
         }

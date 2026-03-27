@@ -967,6 +967,9 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
             Some(WireProtocol::Swd) => {
                 tracing::debug!("SWD: Connecting to debug port with address {:x?}", dp);
             }
+            Some(WireProtocol::Updi) => {
+                unimplemented!("UPDI is not supported by ARM debug sequences");
+            }
             None => {
                 return Err(ArmDebugSequenceError::SequenceSpecific(
                     "Cannot detect current protocol".into(),

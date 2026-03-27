@@ -1,10 +1,9 @@
 use crate::rpc::client::RpcClient;
 
 use crate::CoreOptions;
+use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
 use crate::util::common_options::{CliProtocol, ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
 use crate::util::{cli, parse_u64};
-use anyhow::Context;
-use probe_rs::probe::{DebugProbeSelector, cmsisdap::write_pkobn_updi_m4809_flash};
 
 /// Write to target memory address
 ///
@@ -56,76 +55,46 @@ impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
         ensure_data_in_range(&self.values, self.read_write_options.width)?;
 
-        if self.probe_options.protocol == Some(CliProtocol::Updi) {
-            self.write_updi_flash(&client).await?;
+        let protocol = self.probe_options.protocol;
+        let session = cli::attach_probe(&client, self.probe_options, false).await?;
+        let core = session.core(self.shared.core);
+        let region = if protocol == Some(CliProtocol::Updi) {
+            Some(RpcAvrMemoryRegion::Flash)
         } else {
-            let session = cli::attach_probe(&client, self.probe_options, false).await?;
-            let core = session.core(self.shared.core);
+            None
+        };
 
-            match self.read_write_options.width {
-                ReadWriteBitWidth::B8 => {
-                    core.write_memory_8(
-                        self.read_write_options.address,
-                        self.values.iter().map(|v| *v as u8).collect(),
-                    )
+        match self.read_write_options.width {
+            ReadWriteBitWidth::B8 => {
+                core.write_memory_8(
+                    self.read_write_options.address,
+                    self.values.iter().map(|v| *v as u8).collect(),
+                    region,
+                )
+                .await?;
+            }
+            ReadWriteBitWidth::B16 => {
+                core.write_memory_16(
+                    self.read_write_options.address,
+                    self.values.iter().map(|v| *v as u16).collect(),
+                    region,
+                )
+                .await?;
+            }
+            ReadWriteBitWidth::B32 => {
+                core.write_memory_32(
+                    self.read_write_options.address,
+                    self.values.iter().map(|v| *v as u32).collect(),
+                    region,
+                )
+                .await?;
+            }
+            ReadWriteBitWidth::B64 => {
+                core.write_memory_64(self.read_write_options.address, self.values, region)
                     .await?;
-                }
-                ReadWriteBitWidth::B16 => {
-                    core.write_memory_16(
-                        self.read_write_options.address,
-                        self.values.iter().map(|v| *v as u16).collect(),
-                    )
-                    .await?;
-                }
-                ReadWriteBitWidth::B32 => {
-                    core.write_memory_32(
-                        self.read_write_options.address,
-                        self.values.iter().map(|v| *v as u32).collect(),
-                    )
-                    .await?;
-                }
-                ReadWriteBitWidth::B64 => {
-                    core.write_memory_64(self.read_write_options.address, self.values)
-                        .await?;
-                }
             }
         }
 
         Ok(())
-    }
-
-    async fn write_updi_flash(&self, client: &RpcClient) -> anyhow::Result<()> {
-        if !client.is_local_session() {
-            anyhow::bail!(
-                "The protocol 'UPDI' is currently only supported by 'write' in a local session."
-            );
-        }
-
-        let probe =
-            cli::select_probe(client, self.probe_options.probe.clone().map(Into::into)).await?;
-        let selector: DebugProbeSelector = probe.selector().into();
-        let offset = u32::try_from(self.read_write_options.address)
-            .context("flash-relative AVR address exceeds 32-bit range")?;
-        let data = values_to_le_bytes(self.read_write_options.width, &self.values);
-
-        write_pkobn_updi_m4809_flash(&selector, offset, &data).map_err(Into::into)
-    }
-}
-
-fn values_to_le_bytes(width: ReadWriteBitWidth, values: &[u64]) -> Vec<u8> {
-    match width {
-        ReadWriteBitWidth::B8 => values.iter().map(|value| *value as u8).collect(),
-        ReadWriteBitWidth::B16 => values
-            .iter()
-            .flat_map(|value| (*value as u16).to_le_bytes())
-            .collect(),
-        ReadWriteBitWidth::B32 => values
-            .iter()
-            .flat_map(|value| (*value as u32).to_le_bytes())
-            .collect(),
-        ReadWriteBitWidth::B64 => values
-            .iter()
-            .flat_map(|value| value.to_le_bytes())
-            .collect(),
     }
 }

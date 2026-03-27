@@ -159,6 +159,25 @@ impl ParseFromResponse for Capabilities {
                 },
             };
 
+            let raw_response = buffer
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            tracing::trace!(
+                raw_response = %raw_response,
+                response_len = buffer[0],
+                info_byte_0 = buffer.get(1).copied().unwrap_or_default(),
+                info_byte_1 = buffer.get(2).copied().unwrap_or_default(),
+                swd_implemented = capabilities.swd_implemented,
+                jtag_implemented = capabilities.jtag_implemented,
+                swo_uart_implemented = capabilities.swo_uart_implemented,
+                swo_manchester_implemented = capabilities.swo_manchester_implemented,
+                swo_streaming_trace_implemented = capabilities.swo_streaming_trace_implemented,
+                "Parsed CMSIS-DAP capabilities response"
+            );
+
             Ok(capabilities)
         } else {
             Err(SendError::UnexpectedAnswer)

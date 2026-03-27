@@ -295,6 +295,7 @@ impl SpecificCoreState {
             CoreType::Armv8m => SpecificCoreState::Armv8m(CortexMState::new()),
             CoreType::Riscv => SpecificCoreState::Riscv(RiscvCoreState::new()),
             CoreType::Xtensa => SpecificCoreState::Xtensa(XtensaCoreState::new()),
+            CoreType::AVR => unimplemented!("AVR core type is not yet supported"), // TODO: Add AVR core state when needed.
         }
     }
 

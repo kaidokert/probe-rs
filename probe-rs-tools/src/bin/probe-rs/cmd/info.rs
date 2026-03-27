@@ -7,12 +7,11 @@ use probe_rs::{
         ap::IDR,
         dp::{DLPIDR, TARGETID},
     },
-    probe::{DebugProbeSelector, WireProtocol, cmsisdap::query_pkobn_updi_m4809},
+    probe::WireProtocol,
 };
 use termtree::Tree;
 
 use crate::{
-    cmd::edbg_avr_info,
     rpc::{
         client::RpcClient,
         functions::info::{
@@ -52,8 +51,8 @@ impl Cmd {
         let protocols = match self.common.protocol {
             Some(CliProtocol::Jtag) => vec![WireProtocol::Jtag],
             Some(CliProtocol::Swd) => vec![WireProtocol::Swd],
-            Some(CliProtocol::Updi) => vec![],
-            None => vec![WireProtocol::Jtag, WireProtocol::Swd],
+            Some(CliProtocol::Updi) => vec![WireProtocol::Updi],
+            None => vec![WireProtocol::Jtag, WireProtocol::Swd, WireProtocol::Updi],
         };
 
         let probe = select_probe(&client, self.common.probe.map(Into::into)).await?;
@@ -110,35 +109,6 @@ impl Cmd {
                     println!("{message}");
                 }
             }
-        }
-
-        let try_updi = matches!(self.common.protocol, None | Some(CliProtocol::Updi))
-            && client.is_local_session()
-            && probe.vendor_id == 0x03eb
-            && probe.product_id == 0x2175;
-
-        if !had_success && try_updi {
-            let msg = "Probing target via UPDI";
-            println!("{msg}");
-            println!("{}", "-".repeat(msg.len()));
-            println!();
-
-            let selector: DebugProbeSelector = probe.selector().into();
-            match query_pkobn_updi_m4809(&selector) {
-                Ok(info) => {
-                    println!("Probe: {probe}");
-                    edbg_avr_info::print_info(&info);
-                    had_success = true;
-                }
-                Err(error) => {
-                    last_error = Some(anyhow!("{error}"));
-                    println!("Error while probing target: {error}");
-                }
-            }
-        } else if !had_success && self.common.protocol == Some(CliProtocol::Updi) {
-            last_error = Some(anyhow!(
-                "UPDI probing is currently only available locally for the 03eb:2175 narrow AVR path"
-            ));
         }
 
         if had_success {

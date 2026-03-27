@@ -34,58 +34,68 @@ impl Cmd {
     }
 }
 
-pub(crate) fn print_info(info: &PkobnUpdiM4809Info) {
+pub(crate) fn format_info_lines(info: &PkobnUpdiM4809Info) -> Vec<String> {
+    let mut lines = Vec::new();
+
     if let Some(vendor) = &info.cmsis_dap_vendor {
-        println!("CMSIS-DAP vendor: {vendor}");
+        lines.push(format!("CMSIS-DAP vendor: {vendor}"));
     }
     if let Some(product) = &info.cmsis_dap_product {
-        println!("CMSIS-DAP product: {product}");
+        lines.push(format!("CMSIS-DAP product: {product}"));
     }
     if let Some(serial) = &info.cmsis_dap_serial {
-        println!("CMSIS-DAP serial: {serial}");
+        lines.push(format!("CMSIS-DAP serial: {serial}"));
     }
     if let Some(firmware) = &info.cmsis_dap_firmware_version {
-        println!("CMSIS-DAP firmware: {firmware}");
+        lines.push(format!("CMSIS-DAP firmware: {firmware}"));
     }
-    println!(
+    lines.push(format!(
         "CMSIS-DAP packet size: {} bytes",
         info.cmsis_dap_packet_size
-    );
-    println!("Probe selector: {}", info.probe_selector);
+    ));
+    lines.push(format!("Probe selector: {}", info.probe_selector));
     if let Some(serial) = &info.ice_serial {
-        println!("EDBG serial: {serial}");
+        lines.push(format!("EDBG serial: {serial}"));
     }
-    println!(
+    lines.push(format!(
         "EDBG firmware: HW {} FW {}.{} (rel. {})",
         info.ice_firmware_version.hardware,
         info.ice_firmware_version.major,
         info.ice_firmware_version.minor,
         info.ice_firmware_version.release
-    );
-    println!(
+    ));
+    lines.push(format!(
         "Target voltage: {:.2} V",
         f32::from(info.target_voltage_mv) / 1000.0
-    );
-    println!("UPDI clock: {} kHz", info.updi_clock_khz);
+    ));
+    lines.push(format!("UPDI clock: {} kHz", info.updi_clock_khz));
     if let Some(family_id) = &info.partial_family_id {
-        println!("Partial family ID: {family_id}");
+        lines.push(format!("Partial family ID: {family_id}"));
     }
-    println!("SIB: {}", info.sib_string);
-    println!(
+    lines.push(format!("SIB: {}", info.sib_string));
+    lines.push(format!(
         "Chip revision: {}.{}",
         info.chip_revision >> 4,
         info.chip_revision & 0x0f
-    );
-    println!(
+    ));
+    lines.push(format!(
         "Signature: {:02x} {:02x} {:02x}",
         info.signature[0], info.signature[1], info.signature[2]
-    );
-    println!("Lock byte: {:02x}", info.lock_byte);
-    println!("Fuses: {}", format_hex_bytes(&info.fuses));
-    print_hex_dump("USERROW", &info.userrow);
-    print_hex_dump("PRODSIG", &info.prodsig);
+    ));
+    lines.push(format!("Lock byte: {:02x}", info.lock_byte));
+    lines.push(format!("Fuses: {}", format_hex_bytes(&info.fuses)));
+    lines.extend(hex_dump_lines("USERROW", &info.userrow));
+    lines.extend(hex_dump_lines("PRODSIG", &info.prodsig));
     if let Some(part) = info.detected_part {
-        println!("Detected part: {part}");
+        lines.push(format!("Detected part: {part}"));
+    }
+
+    lines
+}
+
+pub(crate) fn print_info(info: &PkobnUpdiM4809Info) {
+    for line in format_info_lines(info) {
+        println!("{line}");
     }
 }
 
@@ -96,11 +106,16 @@ fn format_hex_bytes(data: &[u8]) -> String {
         .join(" ")
 }
 
-fn print_hex_dump(label: &str, data: &[u8]) {
-    println!("{label}:");
+fn hex_dump_lines(label: &str, data: &[u8]) -> Vec<String> {
+    let mut lines = vec![format!("{label}:")];
     for (offset, chunk) in data.chunks(16).enumerate() {
-        println!("  {:04x}: {}", offset * 16, format_hex_bytes(chunk));
+        lines.push(format!(
+            "  {:04x}: {}",
+            offset * 16,
+            format_hex_bytes(chunk)
+        ));
     }
+    lines
 }
 
 pub(crate) fn select_probe_for_edbg(

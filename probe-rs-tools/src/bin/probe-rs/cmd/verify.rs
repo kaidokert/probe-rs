@@ -1,14 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use probe_rs::probe::{
-    DebugProbeSelector,
-    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_m4809_region},
-};
 
 use crate::FormatOptions;
 use crate::rpc::client::RpcClient;
 use crate::rpc::functions::flash::VerifyResult;
+use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
 use crate::util::cli;
 use crate::util::common_options::CliProtocol;
 use crate::util::common_options::ProbeOptions;
@@ -83,9 +80,8 @@ impl Cmd {
             );
         }
 
-        let probe =
-            cli::select_probe(client, self.probe_options.probe.clone().map(Into::into)).await?;
-        let selector: DebugProbeSelector = probe.selector().into();
+        let session = cli::attach_probe(client, self.probe_options, false).await?;
+        let core = session.core(0);
         let blocks = load_updi_flash_blocks(&self.path, &self.format_options)?;
 
         if blocks.is_empty() {
@@ -93,13 +89,15 @@ impl Cmd {
         }
 
         for block in &blocks {
-            let readback = read_pkobn_updi_m4809_region(
-                &selector,
-                AvrMemoryRegion::Flash,
-                block.address,
-                u32::try_from(block.data.len())
-                    .context("flash block length exceeds 32-bit range")?,
-            )?;
+            let readback = core
+                .read_memory_8(
+                    u64::from(block.address),
+                    u32::try_from(block.data.len())
+                        .context("flash block length exceeds 32-bit range")?
+                        as usize,
+                    Some(RpcAvrMemoryRegion::Flash),
+                )
+                .await?;
             if readback != block.data {
                 println!(
                     "Verification failed: contents do not match at flash offset 0x{:04x}",

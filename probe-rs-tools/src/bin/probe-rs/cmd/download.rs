@@ -2,12 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use object::{Object, ObjectSection, SectionKind};
-use probe_rs::probe::{
-    DebugProbeSelector,
-    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_m4809_region, write_pkobn_updi_m4809_flash},
-};
 
 use crate::rpc::client::RpcClient;
+use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
 
 use crate::util::cli;
 use crate::util::common_options::{BinaryDownloadOptions, CliProtocol, ProbeOptions};
@@ -58,9 +55,8 @@ impl Cmd {
             );
         }
 
-        let probe =
-            cli::select_probe(client, self.probe_options.probe.clone().map(Into::into)).await?;
-        let selector: DebugProbeSelector = probe.selector().into();
+        let session = cli::attach_probe(client, self.probe_options, false).await?;
+        let core = session.core(0);
         let blocks = load_updi_flash_blocks(&self.path, &self.format_options)?;
 
         if blocks.is_empty() {
@@ -81,19 +77,26 @@ impl Cmd {
                 address = block.address,
                 end = block.address + u32::try_from(block.data.len()).unwrap_or(u32::MAX),
             );
-            write_pkobn_updi_m4809_flash(&selector, block.address, &block.data)?;
+            core.write_memory_8(
+                u64::from(block.address),
+                block.data.clone(),
+                Some(RpcAvrMemoryRegion::Flash),
+            )
+            .await?;
         }
 
         if self.download_options.verify {
             println!("Verifying flash...");
             for block in &blocks {
-                let readback = read_pkobn_updi_m4809_region(
-                    &selector,
-                    AvrMemoryRegion::Flash,
-                    block.address,
-                    u32::try_from(block.data.len())
-                        .context("flash block length exceeds 32-bit range")?,
-                )?;
+                let readback = core
+                    .read_memory_8(
+                        u64::from(block.address),
+                        u32::try_from(block.data.len())
+                            .context("flash block length exceeds 32-bit range")?
+                            as usize,
+                        Some(RpcAvrMemoryRegion::Flash),
+                    )
+                    .await?;
                 if readback != block.data {
                     anyhow::bail!(
                         "Verification failed for block at flash offset 0x{:04x}.",

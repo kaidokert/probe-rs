@@ -264,6 +264,55 @@ pub fn read_pkobn_updi_m4809_region(
     result.map_err(DebugProbeError::from)
 }
 
+/// Read bytes from a narrow `ATmega4809` UPDI memory region using an already-open CMSIS-DAP probe.
+pub fn read_attached_pkobn_updi_m4809_region(
+    probe: &mut super::super::CmsisDap,
+    region: AvrMemoryRegion,
+    offset: u32,
+    length: u32,
+) -> Result<Vec<u8>, DebugProbeError> {
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device);
+    let result = (|| {
+        let _ = transport.enter_m4809_programming_session()?;
+        transport.read_region(region, offset, length)
+    })();
+
+    let _ = transport.cleanup();
+    result.map_err(DebugProbeError::from)
+}
+
+/// Erase the narrow `ATmega4809` target through the EDBG AVR chip erase command using an
+/// already-open CMSIS-DAP probe.
+pub fn erase_attached_pkobn_updi_m4809(
+    probe: &mut super::super::CmsisDap,
+) -> Result<(), DebugProbeError> {
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device);
+    let result = (|| {
+        let _ = transport.enter_m4809_programming_session()?;
+        transport.erase_chip()
+    })();
+
+    let _ = transport.cleanup();
+    result.map_err(DebugProbeError::from)
+}
+
+/// Write bytes into narrow `ATmega4809` flash memory using page programming through an
+/// already-open CMSIS-DAP probe.
+pub fn write_attached_pkobn_updi_m4809_flash(
+    probe: &mut super::super::CmsisDap,
+    offset: u32,
+    data: &[u8],
+) -> Result<(), DebugProbeError> {
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device);
+    let result = (|| {
+        let _ = transport.enter_m4809_programming_session()?;
+        transport.write_flash(offset, data)
+    })();
+
+    let _ = transport.cleanup();
+    result.map_err(DebugProbeError::from)
+}
+
 /// Write bytes into narrow `ATmega4809` flash memory using page programming.
 pub fn write_pkobn_updi_m4809_flash(
     selector: &DebugProbeSelector,
@@ -310,7 +359,7 @@ pub fn reset_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), Debug
 
 fn open_pkobn_transport(
     selector: &DebugProbeSelector,
-) -> Result<EdbgAvrTransport, DebugProbeError> {
+) -> Result<EdbgAvrTransport<'static>, DebugProbeError> {
     if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
         return Err(EdbgAvrError::UnsupportedProbe {
             selector: selector.clone(),
@@ -324,21 +373,58 @@ fn open_pkobn_transport(
     Ok(EdbgAvrTransport::new(device))
 }
 
-struct EdbgAvrTransport {
-    device: CmsisDapDevice,
+enum TransportDevice<'a> {
+    Owned(CmsisDapDevice),
+    Borrowed(&'a mut CmsisDapDevice),
+}
+
+impl TransportDevice<'_> {
+    fn as_mut(&mut self) -> &mut CmsisDapDevice {
+        match self {
+            TransportDevice::Owned(device) => device,
+            TransportDevice::Borrowed(device) => device,
+        }
+    }
+
+    fn as_ref(&self) -> &CmsisDapDevice {
+        match self {
+            TransportDevice::Owned(device) => device,
+            TransportDevice::Borrowed(device) => device,
+        }
+    }
+}
+
+struct EdbgAvrTransport<'a> {
+    device: TransportDevice<'a>,
     command_sequence: u16,
     prepared: bool,
+    cleanup_prepare: bool,
     general_signed_on: bool,
     avr_signed_on: bool,
     programming_enabled: bool,
 }
 
-impl EdbgAvrTransport {
+impl EdbgAvrTransport<'static> {
     fn new(device: CmsisDapDevice) -> Self {
         Self {
-            device,
+            device: TransportDevice::Owned(device),
             command_sequence: 0,
             prepared: false,
+            cleanup_prepare: false,
+            general_signed_on: false,
+            avr_signed_on: false,
+            programming_enabled: false,
+        }
+    }
+}
+
+impl<'a> EdbgAvrTransport<'a> {
+    fn from_attached_device(device: &'a mut CmsisDapDevice) -> Self {
+        Self {
+            device: TransportDevice::Borrowed(device),
+            command_sequence: 0,
+            prepared: true,
+            cleanup_prepare: false,
             general_signed_on: false,
             avr_signed_on: false,
             programming_enabled: false,
@@ -611,6 +697,7 @@ impl EdbgAvrTransport {
             first_error.get_or_insert(error);
         }
         if self.prepared
+            && self.cleanup_prepare
             && let Err(error) = self.finish_prepare()
         {
             first_error.get_or_insert(error);
@@ -624,7 +711,7 @@ impl EdbgAvrTransport {
     }
 
     fn prepare(&mut self) -> Result<(), EdbgAvrError> {
-        match send_command(&mut self.device, &ConnectRequest::Swd)? {
+        match send_command(self.device.as_mut(), &ConnectRequest::Swd)? {
             ConnectResponse::SuccessfulInitForSWD => {}
             ConnectResponse::SuccessfulInitForJTAG | ConnectResponse::InitFailed => {
                 return Err(EdbgAvrError::UnexpectedResponse {
@@ -634,14 +721,15 @@ impl EdbgAvrTransport {
             }
         }
 
-        let _ = send_command(&mut self.device, &HostStatusRequest::connected(true))?;
+        let _ = send_command(self.device.as_mut(), &HostStatusRequest::connected(true))?;
         self.prepared = true;
+        self.cleanup_prepare = true;
         Ok(())
     }
 
     fn finish_prepare(&mut self) -> Result<(), EdbgAvrError> {
-        let _ = send_command(&mut self.device, &HostStatusRequest::connected(false))?;
-        let DisconnectResponse(status) = send_command(&mut self.device, &DisconnectRequest {})?;
+        let _ = send_command(self.device.as_mut(), &HostStatusRequest::connected(false))?;
+        let DisconnectResponse(status) = send_command(self.device.as_mut(), &DisconnectRequest {})?;
         if status != Status::DapOk {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "CMSIS-DAP disconnect",
@@ -987,24 +1075,24 @@ impl EdbgAvrTransport {
         let mut tx = vec![0u8; buffer_len];
         tx[1..1 + payload.len()].copy_from_slice(payload);
 
-        let write_len = match self.device {
+        let write_len = match self.device.as_ref() {
             CmsisDapDevice::V1 { .. } => buffer_len,
             CmsisDapDevice::V2 { .. } => payload.len() + 1,
         };
-        let _ = self.device.write(&tx[..write_len])?;
+        let _ = self.device.as_mut().write(&tx[..write_len])?;
 
         let mut rx = vec![0u8; buffer_len];
-        let read_len = self.device.read(&mut rx)?;
+        let read_len = self.device.as_mut().read(&mut rx)?;
         rx.truncate(read_len);
         Ok(rx)
     }
 
     fn packet_size(&self) -> usize {
-        match self.device {
-            CmsisDapDevice::V1 { report_size, .. } => report_size,
+        match self.device.as_ref() {
+            CmsisDapDevice::V1 { report_size, .. } => *report_size,
             CmsisDapDevice::V2 {
                 max_packet_size, ..
-            } => max_packet_size,
+            } => *max_packet_size,
         }
     }
 }

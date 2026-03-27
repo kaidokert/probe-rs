@@ -392,6 +392,7 @@ impl CoreDump {
                 }
             }
             CoreType::Xtensa => &XTENSA_CORE_REGISTERS,
+            CoreType::AVR => unimplemented!("AVR core type is not yet supported"), // TODO: Add AVR core registers when needed.
         }
     }
 }

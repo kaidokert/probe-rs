@@ -70,6 +70,7 @@ impl TargetDescription {
             CoreType::Armv8m => "armv8-m.main",
             CoreType::Riscv => "riscv:rv32",
             CoreType::Xtensa => "xtensa",
+            CoreType::AVR => "avr", // TODO: Add AVR architecture string when needed.
         };
 
         Self {
@@ -246,6 +247,7 @@ pub fn build_target_description(
         },
         CoreType::Riscv => build_riscv_registers(&mut desc, regs),
         CoreType::Xtensa => build_xtensa_registers(&mut desc, regs),
+        CoreType::AVR => unimplemented!("AVR core type is not yet supported"), // TODO: Add AVR register building when needed.
     };
 
     desc

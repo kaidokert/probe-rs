@@ -81,9 +81,7 @@ pub async fn attach_probe(
     let protocol = match probe_options.protocol {
         Some(CliProtocol::Swd) => Some(crate::rpc::functions::probe::WireProtocol::Swd),
         Some(CliProtocol::Jtag) => Some(crate::rpc::functions::probe::WireProtocol::Jtag),
-        Some(CliProtocol::Updi) => {
-            anyhow::bail!("The protocol 'UPDI' is not supported by this command.")
-        }
+        Some(CliProtocol::Updi) => Some(crate::rpc::functions::probe::WireProtocol::Updi),
         None => None,
     };
 

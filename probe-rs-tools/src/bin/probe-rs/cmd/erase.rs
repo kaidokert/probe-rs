@@ -6,7 +6,6 @@ use crate::{
         flash::CliProgressBars,
     },
 };
-use probe_rs::probe::{DebugProbeSelector, cmsisdap::erase_pkobn_updi_m4809};
 
 #[derive(clap::Parser)]
 pub struct Cmd {
@@ -23,42 +22,29 @@ pub struct Cmd {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        if self.common.protocol == Some(CliProtocol::Updi) {
-            if self.read_flasher_rtt {
-                anyhow::bail!("'erase --protocol updi' does not support '--read-flasher-rtt'.");
-            }
-            if !client.is_local_session() {
-                anyhow::bail!(
-                    "The protocol 'UPDI' is currently only supported by 'erase' in a local session."
-                );
-            }
-
-            let probe =
-                cli::select_probe(&client, self.common.probe.clone().map(Into::into)).await?;
-            let selector: DebugProbeSelector = probe.selector().into();
-            erase_pkobn_updi_m4809(&selector)?;
-            println!("Erase successful");
-        } else {
-            let session = cli::attach_probe(&client, self.common, false).await?;
-
-            let pb = if self.disable_progressbars {
-                None
-            } else {
-                Some(CliProgressBars::new())
-            };
-
-            session
-                .erase(
-                    EraseCommand::All,
-                    self.read_flasher_rtt,
-                    async move |event| {
-                        if let Some(pb) = pb.as_ref() {
-                            pb.handle(event);
-                        }
-                    },
-                )
-                .await?;
+        if self.common.protocol == Some(CliProtocol::Updi) && self.read_flasher_rtt {
+            anyhow::bail!("'erase --protocol updi' does not support '--read-flasher-rtt'.");
         }
+
+        let session = cli::attach_probe(&client, self.common, false).await?;
+
+        let pb = if self.disable_progressbars {
+            None
+        } else {
+            Some(CliProgressBars::new())
+        };
+
+        session
+            .erase(
+                EraseCommand::All,
+                self.read_flasher_rtt,
+                async move |event| {
+                    if let Some(pb) = pb.as_ref() {
+                        pb.handle(event);
+                    }
+                },
+            )
+            .await?;
 
         Ok(())
     }

@@ -124,7 +124,7 @@ impl CliProtocol {
         match self {
             CliProtocol::Swd => Some(ProbeWireProtocol::Swd),
             CliProtocol::Jtag => Some(ProbeWireProtocol::Jtag),
-            CliProtocol::Updi => None,
+            CliProtocol::Updi => Some(ProbeWireProtocol::Updi),
         }
     }
 }
