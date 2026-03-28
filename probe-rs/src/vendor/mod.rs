@@ -17,10 +17,10 @@ use crate::{
             XtensaCommunicationInterface, XtensaDebugInterfaceState,
         },
     },
-    config::{ChipInfo, DebugSequence, Registry},
-    probe::Probe,
+    config::{ChipInfo, DebugSequence, Registry, TargetDescriptionSource},
+    probe::{Probe, WireProtocol},
+    rtt::ScanRegion,
 };
-
 pub mod amd;
 pub mod holtek;
 pub mod infineon;
@@ -288,6 +288,50 @@ pub(crate) fn auto_determine_target(
 ) -> Result<(Probe, Option<Target>), Error> {
     tracing::info!("Auto-detecting target");
     let mut found_target = None;
+
+    if probe.protocol() == Some(WireProtocol::Updi) {
+        use crate::probe::cmsisdap::{CmsisDap, identify_attached_pkobn_updi};
+
+        let chip_name = {
+            let cmsis: Option<&mut CmsisDap> = Probe::try_into(&mut probe);
+            match cmsis {
+                Some(cmsis) => match identify_attached_pkobn_updi(cmsis) {
+                    Ok(chip) => {
+                        tracing::info!("UPDI auto-detection identified: {}", chip.name);
+                        chip.name.to_string()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "UPDI auto-detection failed ({e}), falling back to ATmega4809"
+                        );
+                        "ATmega4809".to_string()
+                    }
+                },
+                None => {
+                    tracing::warn!(
+                        "UPDI auto-detection: probe is not CMSIS-DAP, assuming ATmega4809"
+                    );
+                    "ATmega4809".to_string()
+                }
+            }
+        };
+
+        let target = Target {
+            name: chip_name,
+            cores: vec![],
+            flash_algorithms: vec![],
+            memory_map: vec![],
+            source: TargetDescriptionSource::Generic,
+            debug_sequence: DebugSequence::Avr(()),
+            rtt_scan_regions: ScanRegion::Ram,
+            jtag: None,
+            default_format: None,
+        };
+
+        tracing::info!("Found target: {}", target.name);
+        probe.detach()?;
+        return Ok((probe, Some(target)));
+    }
 
     // Xtensa and RISC-V interfaces don't need moving the probe. For clarity, their
     // handlers work with the borrowed probe, and we use these wrappers to adapt to the

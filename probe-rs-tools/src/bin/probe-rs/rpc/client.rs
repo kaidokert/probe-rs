@@ -47,7 +47,7 @@ use crate::{
                 FlashRequest, ProgressEvent, VerifyRequest, VerifyResult,
             },
             info::{InfoEvent, TargetInfoRequest},
-            memory::{ReadMemoryRequest, WriteMemoryRequest},
+            memory::{AvrMemoryRegion, ReadMemoryRequest, WriteMemoryRequest},
             monitor::{MonitorExitReason, MonitorMode, MonitorOptions, MonitorRequest},
             probe::{
                 AttachRequest, AttachResult, DebugProbeEntry, DebugProbeSelector,
@@ -674,84 +674,132 @@ pub struct CoreInterface {
 }
 
 impl CoreInterface {
-    pub async fn read_memory_8(&self, address: u64, count: usize) -> anyhow::Result<Vec<u8>> {
+    pub async fn read_memory_8(
+        &self,
+        address: u64,
+        count: usize,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<Vec<u8>> {
         self.client
             .send_resp::<ReadMemory8Endpoint, _>(&ReadMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 count: count as u32,
+                region,
             })
             .await
     }
-    pub async fn read_memory_16(&self, address: u64, count: usize) -> anyhow::Result<Vec<u16>> {
+    pub async fn read_memory_16(
+        &self,
+        address: u64,
+        count: usize,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<Vec<u16>> {
         self.client
             .send_resp::<ReadMemory16Endpoint, _>(&ReadMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 count: count as u32,
+                region,
             })
             .await
     }
-    pub async fn read_memory_32(&self, address: u64, count: usize) -> anyhow::Result<Vec<u32>> {
+    pub async fn read_memory_32(
+        &self,
+        address: u64,
+        count: usize,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<Vec<u32>> {
         self.client
             .send_resp::<ReadMemory32Endpoint, _>(&ReadMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 count: count as u32,
+                region,
             })
             .await
     }
-    pub async fn read_memory_64(&self, address: u64, count: usize) -> anyhow::Result<Vec<u64>> {
+    pub async fn read_memory_64(
+        &self,
+        address: u64,
+        count: usize,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<Vec<u64>> {
         self.client
             .send_resp::<ReadMemory64Endpoint, _>(&ReadMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 count: count as u32,
+                region,
             })
             .await
     }
 
-    pub async fn write_memory_8(&self, address: u64, data: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn write_memory_8(
+        &self,
+        address: u64,
+        data: Vec<u8>,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<()> {
         self.client
             .send_resp::<WriteMemory8Endpoint, _>(&WriteMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 data,
+                region,
             })
             .await
     }
-    pub async fn write_memory_16(&self, address: u64, data: Vec<u16>) -> anyhow::Result<()> {
+    pub async fn write_memory_16(
+        &self,
+        address: u64,
+        data: Vec<u16>,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<()> {
         self.client
             .send_resp::<WriteMemory16Endpoint, _>(&WriteMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 data,
+                region,
             })
             .await
     }
-    pub async fn write_memory_32(&self, address: u64, data: Vec<u32>) -> anyhow::Result<()> {
+    pub async fn write_memory_32(
+        &self,
+        address: u64,
+        data: Vec<u32>,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<()> {
         self.client
             .send_resp::<WriteMemory32Endpoint, _>(&WriteMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 data,
+                region,
             })
             .await
     }
-    pub async fn write_memory_64(&self, address: u64, data: Vec<u64>) -> anyhow::Result<()> {
+    pub async fn write_memory_64(
+        &self,
+        address: u64,
+        data: Vec<u64>,
+        region: Option<AvrMemoryRegion>,
+    ) -> anyhow::Result<()> {
         self.client
             .send_resp::<WriteMemory64Endpoint, _>(&WriteMemoryRequest {
                 sessid: self.sessid,
                 core: self.core,
                 address,
                 data,
+                region,
             })
             .await
     }
