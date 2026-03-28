@@ -107,7 +107,9 @@ pub struct ProbeOptions {
     )]
     pub chip_description_path: Option<PathBuf>,
 
-    /// Protocol used to connect to chip. Possible options: [swd, jtag, updi]
+    /// Protocol used to connect to chip. Possible options: [swd, jtag]
+    ///
+    /// Note: 'updi' is supported only by the dedicated edbg-avr-* and download/verify/erase commands.
     #[arg(long, env = "PROBE_RS_PROTOCOL", help_heading = "PROBE CONFIGURATION")]
     pub protocol: Option<WireProtocol>,
 

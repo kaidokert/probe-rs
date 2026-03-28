@@ -65,14 +65,14 @@ impl Cmd {
         }
 
         let total_bytes: usize = blocks.iter().map(|block| block.data.len()).sum();
-        println!(
+        tracing::info!(
             "Programming {} block(s), {} bytes via UPDI",
             blocks.len(),
             total_bytes
         );
 
         for block in &blocks {
-            println!(
+            tracing::info!(
                 "  flash[0x{address:04x}..0x{end:04x}) <- {} bytes",
                 block.data.len(),
                 address = block.address,
@@ -87,7 +87,7 @@ impl Cmd {
         }
 
         if self.download_options.verify {
-            println!("Verifying flash...");
+            tracing::info!("Verifying flash...");
             for block in &blocks {
                 let readback = core
                     .read_memory_8(
@@ -105,7 +105,7 @@ impl Cmd {
                     );
                 }
             }
-            println!("Verification successful");
+            tracing::info!("Verification successful");
         }
 
         Ok(())
@@ -181,8 +181,8 @@ fn load_updi_bin_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Resul
     data.drain(..skip);
 
     let base_address = format.bin_base_address().unwrap_or(0);
-    let address =
-        u32::try_from(base_address).context("binary base address exceeds 32-bit range")?;
+    let address = u32::try_from(base_address + skip as u64)
+        .context("binary base address + skip exceeds 32-bit range")?;
 
     Ok(merge_flash_blocks(vec![FlashBlock { address, data }]))
 }

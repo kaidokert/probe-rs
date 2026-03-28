@@ -242,7 +242,9 @@ pub fn query_pkobn_updi_m4809(
         detected_part: None,
     });
 
-    let _ = transport.cleanup();
+    if let Err(e) = transport.cleanup() {
+        tracing::warn!("EDBG AVR transport cleanup failed: {e}");
+    }
 
     result.map_err(DebugProbeError::from)
 }
@@ -509,6 +511,7 @@ impl<'a> EdbgAvrTransport<'a> {
             return Ok(None);
         }
 
+        tracing::debug!("EDBG AVR: entering ATmega4809 programming session");
         self.prepare()?;
         self.general_sign_on()?;
 
@@ -558,6 +561,10 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn write_flash(&mut self, offset: u32, data: &[u8]) -> Result<(), EdbgAvrError> {
+        tracing::debug!(
+            "EDBG AVR: write_flash offset=0x{offset:04x} len={}",
+            data.len()
+        );
         let data_len = u32::try_from(data.len()).map_err(|_| EdbgAvrError::UnexpectedResponse {
             context: "write flash",
             details: format!("write length exceeds 32-bit range: {}", data.len()),
@@ -639,6 +646,7 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn erase_chip(&mut self) -> Result<(), EdbgAvrError> {
+        tracing::debug!("EDBG AVR: erasing chip");
         let mut command = Vec::with_capacity(8);
         command.extend_from_slice(&[SCOPE_AVR, CMD3_ERASE_MEMORY, 0, XMEGA_ERASE_CHIP]);
         command.extend_from_slice(&0u32.to_le_bytes());
@@ -711,6 +719,7 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn prepare(&mut self) -> Result<(), EdbgAvrError> {
+        tracing::debug!("EDBG AVR: preparing CMSIS-DAP connection");
         match send_command(self.device.as_mut(), &ConnectRequest::Swd)? {
             ConnectResponse::SuccessfulInitForSWD => {}
             ConnectResponse::SuccessfulInitForJTAG | ConnectResponse::InitFailed => {
@@ -871,6 +880,9 @@ impl<'a> EdbgAvrTransport<'a> {
         address: u32,
         length: u32,
     ) -> Result<Vec<u8>, EdbgAvrError> {
+        tracing::trace!(
+            "EDBG AVR: read_memory type=0x{memory_type:02x} addr=0x{address:04x} len={length}"
+        );
         let mut command = Vec::with_capacity(12);
         command.extend_from_slice(&[SCOPE_AVR, CMD3_READ_MEMORY, 0, memory_type]);
         command.extend_from_slice(&address.to_le_bytes());
@@ -884,9 +896,18 @@ impl<'a> EdbgAvrTransport<'a> {
             });
         }
 
-        let mut data = response[3..].to_vec();
-        data.truncate(length as usize);
-        Ok(data)
+        let payload = &response[3..];
+        let expected_len = length as usize;
+        if payload.len() < expected_len {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "read memory",
+                details: format!(
+                    "short read: expected {expected_len} bytes, got {}",
+                    payload.len()
+                ),
+            });
+        }
+        Ok(payload[..expected_len].to_vec())
     }
 
     fn command(&mut self, payload: &[u8], context: &'static str) -> Result<Vec<u8>, EdbgAvrError> {
@@ -908,6 +929,7 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn send_payload(&mut self, payload: &[u8]) -> Result<(), EdbgAvrError> {
+        tracing::trace!("EDBG AVR: send_payload len={}", payload.len());
         let packet_size = self.packet_size();
         let first_capacity =
             packet_size
@@ -1037,10 +1059,26 @@ impl<'a> EdbgAvrTransport<'a> {
                 }
                 expected_fragment += 1;
 
+                if response.len() < 4 {
+                    return Err(EdbgAvrError::UnexpectedResponse {
+                        context: "EDBG receive",
+                        details: format!(
+                            "truncated fragment header: got {} bytes, need 4",
+                            response.len()
+                        ),
+                    });
+                }
                 let claimed_len = u16::from_be_bytes([response[2], response[3]]) as usize;
                 let available_len = response.len().saturating_sub(4);
-                let fragment_len = claimed_len.min(available_len);
-                collected.extend_from_slice(&response[4..4 + fragment_len]);
+                if available_len < claimed_len {
+                    return Err(EdbgAvrError::UnexpectedResponse {
+                        context: "EDBG receive",
+                        details: format!(
+                            "short fragment: claimed {claimed_len} bytes, got {available_len}"
+                        ),
+                    });
+                }
+                collected.extend_from_slice(&response[4..4 + claimed_len]);
 
                 if fragment_number == total_fragments {
                     break;

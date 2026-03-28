@@ -109,7 +109,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
         match self.protocol {
             WireProtocol::Swd => self.swd_speed_khz,
             WireProtocol::Jtag => self.jtag_speed_khz,
-            WireProtocol::Updi => unimplemented!("UPDI is not supported by ST-Link"),
+            WireProtocol::Updi => 0,
         }
     }
 
@@ -632,7 +632,9 @@ impl<D: StLinkUsb> StLink<D> {
         let cmd_proto = match protocol {
             WireProtocol::Swd => 0,
             WireProtocol::Jtag => 1,
-            WireProtocol::Updi => unimplemented!("UPDI is not supported by ST-Link"),
+            WireProtocol::Updi => {
+                return Err(StlinkError::CommandFailed(Status::JtagUnknownError));
+            }
         };
 
         let mut buf = [0; 52];

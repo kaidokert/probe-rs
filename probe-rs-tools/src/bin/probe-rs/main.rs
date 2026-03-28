@@ -480,7 +480,7 @@ impl FormatOptions {
             Some("bin") => Ok(FormatKind::Bin),
             Some("uf2") => Ok(FormatKind::Uf2),
             _ => anyhow::bail!(
-                "The UPDI download path requires '--binary-format' for files without a recognized extension."
+                "The UPDI path requires '--binary-format' for files without a recognized extension."
             ),
         }
     }

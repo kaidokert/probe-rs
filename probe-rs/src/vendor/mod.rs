@@ -290,6 +290,11 @@ pub(crate) fn auto_determine_target(
     let mut found_target = None;
 
     if probe.protocol() == Some(WireProtocol::Updi) {
+        // TODO: Query the device signature/SIB to resolve the actual target instead of
+        // hardcoding ATmega4809.  For now, this narrow path only supports a single device.
+        tracing::warn!(
+            "UPDI auto-detection is limited: assuming ATmega4809 (signature check not yet implemented)"
+        );
         let target = Target {
             name: "ATmega4809".to_string(),
             cores: vec![],

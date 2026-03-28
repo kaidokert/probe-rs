@@ -79,7 +79,7 @@ pub async fn write_memory<W: Word + 'static>(
             request.region.map(Into::into),
         )?;
     } else {
-        let mut core = session.core(request.core as usize).unwrap();
+        let mut core = session.core(request.core as usize)?;
         W::write(&mut core, request.address, &request.data)?;
     }
     Ok(())
@@ -108,6 +108,15 @@ pub async fn read_memory<W: Word + 'static>(
         request.region.map(Into::into),
     )?;
 
+    let expected_len = request.count as usize * std::mem::size_of::<W>();
+    if bytes.len() < expected_len {
+        return Err(anyhow::anyhow!(
+            "read_memory returned {} bytes, expected {}",
+            bytes.len(),
+            expected_len
+        )
+        .into());
+    }
     let mut words = vec![W::default(); request.count as usize];
     for (index, word) in words.iter_mut().enumerate() {
         let start = index * std::mem::size_of::<W>();

@@ -251,7 +251,7 @@ impl FlashAlgorithm {
             Architecture::Arm => 8,
             Architecture::Riscv => 16,
             Architecture::Xtensa => 16,
-            Architecture::Avr => 8,
+            Architecture::Avr => 1,
         }
     }
 

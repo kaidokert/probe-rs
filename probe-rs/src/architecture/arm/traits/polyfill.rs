@@ -536,7 +536,7 @@ fn perform_raw_transfers<P: DebugProbe + RawSwdIo + JtagAccess>(
     match probe.active_protocol().unwrap() {
         WireProtocol::Swd => perform_swd_transfers(probe, transfers),
         WireProtocol::Jtag => perform_jtag_transfers(probe, transfers),
-        WireProtocol::Updi => unimplemented!("UPDI is not supported by ARM DAP transfers"),
+        WireProtocol::Updi => Err(DebugProbeError::UnsupportedProtocol(WireProtocol::Updi)),
     }
 }
 
@@ -1193,7 +1193,7 @@ fn send_sequence<P: RawSwdIo + JtagAccess>(
             probe.swd_io(sequence.io_items())?;
         }
         WireProtocol::Updi => {
-            unimplemented!("UPDI is not supported by ARM SWJ sequences");
+            return Err(DebugProbeError::UnsupportedProtocol(WireProtocol::Updi));
         }
     }
 

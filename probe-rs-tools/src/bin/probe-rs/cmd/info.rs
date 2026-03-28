@@ -49,7 +49,7 @@ impl Cmd {
             Some(WireProtocol::Jtag) => vec![WireProtocol::Jtag],
             Some(WireProtocol::Swd) => vec![WireProtocol::Swd],
             Some(WireProtocol::Updi) => vec![WireProtocol::Updi],
-            None => vec![WireProtocol::Jtag, WireProtocol::Swd, WireProtocol::Updi],
+            None => vec![WireProtocol::Jtag, WireProtocol::Swd],
         };
 
         let probe = select_probe(&client, self.common.probe.map(Into::into)).await?;

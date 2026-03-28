@@ -62,8 +62,10 @@ impl Cmd {
                 .await?;
 
             match result {
-                VerifyResult::Ok => println!("Verification successful"),
-                VerifyResult::Mismatch => println!("Verification failed: contents do not match"),
+                VerifyResult::Ok => tracing::info!("Verification successful"),
+                VerifyResult::Mismatch => {
+                    tracing::warn!("Verification failed: contents do not match")
+                }
             }
 
             Ok(())
@@ -99,15 +101,14 @@ impl Cmd {
                 )
                 .await?;
             if readback != block.data {
-                println!(
+                anyhow::bail!(
                     "Verification failed: contents do not match at flash offset 0x{:04x}",
                     block.address
                 );
-                return Ok(());
             }
         }
 
-        println!("Verification successful");
+        tracing::info!("Verification successful");
         Ok(())
     }
 }

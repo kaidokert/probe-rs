@@ -1,6 +1,5 @@
 use anyhow::Context;
 use ihex::Record;
-use itertools::Itertools;
 use std::io::Write;
 use std::path::Path;
 
@@ -107,18 +106,34 @@ impl OutputFormat {
     fn write_ihex(mut dst: impl Write, address: u64, data: &[u8]) -> anyhow::Result<()> {
         let mut running_address = address;
         let mut records = vec![];
+        let mut last_address_msbs: Option<u16> = None;
 
-        for chunk in &data.iter().copied().chunks(255) {
+        let mut remaining = data;
+        while !remaining.is_empty() {
             let address_msbs: u16 = (running_address >> 16)
                 .try_into()
                 .context("Hex format only supports addressing up to 32 bits")?;
 
-            records.push(Record::ExtendedLinearAddress(address_msbs));
+            // Emit an extended linear address record when crossing a 64 KiB boundary.
+            if last_address_msbs != Some(address_msbs) {
+                records.push(Record::ExtendedLinearAddress(address_msbs));
+                last_address_msbs = Some(address_msbs);
+            }
+
+            // Limit the chunk so it doesn't cross a 64 KiB segment boundary.
+            let bytes_until_boundary = 0x10000u64.saturating_sub(running_address & 0xFFFF);
+            let chunk_len = remaining
+                .len()
+                .min(255)
+                .min(bytes_until_boundary as usize)
+                .max(1);
+
             records.push(Record::Data {
                 offset: (running_address & 0xFFFF) as u16,
-                value: chunk.collect(),
+                value: remaining[..chunk_len].to_vec(),
             });
-            running_address += 255;
+            remaining = &remaining[chunk_len..];
+            running_address += chunk_len as u64;
         }
 
         records.push(Record::EndOfFile);

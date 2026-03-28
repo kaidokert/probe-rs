@@ -18,6 +18,7 @@ use crate::{
         dp::{DpAccess, DpAddress, DpRegister},
         memory::ArmMemoryInterface,
         sequences::ArmDebugSequence,
+        sequences::ArmDebugSequenceError,
     },
     probe::WireProtocol,
 };
@@ -388,7 +389,9 @@ impl ArmDebugSequence for MCX {
                     interface.write_dp_register(dp, abort)?;
                 }
                 WireProtocol::Updi => {
-                    unimplemented!("UPDI is not supported by MCX ARM debug sequences");
+                    return Err(ArmError::from(ArmDebugSequenceError::SequenceSpecific(
+                        "UPDI is not supported by MCX ARM debug sequences".into(),
+                    )));
                 }
             }
         }
