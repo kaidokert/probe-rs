@@ -97,6 +97,8 @@ pub enum Architecture {
     Riscv,
     /// An Xtensa core.
     Xtensa,
+    /// An AVR core.
+    Avr,
 }
 
 /// Instruction set used by a core
