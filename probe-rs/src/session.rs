@@ -56,6 +56,7 @@ pub struct Session {
     interfaces: ArchitectureInterface,
     cores: Vec<CombinedCoreState>,
     configured_trace_sink: Option<TraceSink>,
+    permissions: Permissions,
 }
 
 /// The `SessionConfig` struct is used to configure a new `Session` during auto-attach.
@@ -194,7 +195,7 @@ impl Session {
             Architecture::Riscv | Architecture::Xtensa => {
                 Self::attach_jtag(probe, target, attach_method, permissions, cores)?
             }
-            Architecture::Avr => Self::attach_avr_stub(probe, target)?,
+            Architecture::Avr => Self::attach_avr_stub(probe, target, permissions.clone())?,
         };
 
         session.clear_all_hw_breakpoints()?;
@@ -202,17 +203,32 @@ impl Session {
         Ok(session)
     }
 
-    fn attach_avr_stub(probe: Probe, target: Target) -> Result<Self, Error> {
-        use crate::probe::cmsisdap::{ATMEGA4809, KNOWN_AVR_CHIPS};
+    fn attach_avr_stub(
+        probe: Probe,
+        target: Target,
+        permissions: Permissions,
+    ) -> Result<Self, Error> {
+        use crate::probe::cmsisdap::KNOWN_AVR_CHIPS;
         let chip: &'static AvrChipDescriptor = KNOWN_AVR_CHIPS
             .iter()
             .find(|c| c.name.eq_ignore_ascii_case(&target.name))
-            .unwrap_or(&ATMEGA4809);
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "no AVR UPDI descriptor found for chip '{}'; known chips: {}",
+                    target.name,
+                    KNOWN_AVR_CHIPS
+                        .iter()
+                        .map(|c| c.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
         Ok(Session {
             target,
             interfaces: ArchitectureInterface::Avr(probe, chip),
             cores: Vec::new(),
             configured_trace_sink: None,
+            permissions,
         })
     }
 
@@ -328,6 +344,7 @@ impl Session {
                 interfaces: ArchitectureInterface::Arm(interface),
                 cores,
                 configured_trace_sink: None,
+                permissions: permissions.clone(),
             };
 
             {
@@ -363,6 +380,7 @@ impl Session {
                 interfaces: ArchitectureInterface::Arm(interface),
                 cores,
                 configured_trace_sink: None,
+                permissions,
             })
         }
     }
@@ -371,7 +389,7 @@ impl Session {
         mut probe: Probe,
         target: Target,
         _attach_method: AttachMethod,
-        _permissions: Permissions,
+        permissions: Permissions,
         cores: Vec<CombinedCoreState>,
     ) -> Result<Self, Error> {
         // While we still don't support mixed architectures
@@ -457,6 +475,7 @@ impl Session {
             interfaces,
             cores,
             configured_trace_sink: None,
+            permissions,
         };
 
         // Connect to the cores
@@ -813,6 +832,10 @@ impl Session {
     /// Erase all target flash memory using either the generic flashing path or a narrow AVR
     /// programmer-style chip erase.
     pub fn erase_all(&mut self) -> Result<(), Error> {
+        self.permissions
+            .erase_all()
+            .map_err(|e| Error::MissingPermissions(e.to_string()))?;
+
         match &mut self.interfaces {
             ArchitectureInterface::Avr(probe, chip) => {
                 let cmsis = probe

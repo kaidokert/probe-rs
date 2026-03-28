@@ -675,6 +675,45 @@ impl<'a> EdbgAvrTransport<'a> {
                     self.chip = chip;
                     let partial_family_id = partial_family_id_from_response(&avr_sign_on_response);
                     self.enter_progmode()?;
+
+                    // Verify chip identity by reading the production signature.
+                    let prodsig = self.read_memory(MTYPE_PRODSIG, self.chip.signature_base, 3)?;
+                    if prodsig.len() < 3 {
+                        return Err(EdbgAvrError::UnexpectedResponse {
+                            context: "signature verification",
+                            details: format!("expected at least 3 bytes, got {}", prodsig.len()),
+                        });
+                    }
+                    let signature: [u8; 3] = [prodsig[0], prodsig[1], prodsig[2]];
+                    if signature != self.chip.signature {
+                        tracing::warn!(
+                            "EDBG AVR: sign-on accepted {} but signature {:02x} {:02x} {:02x} \
+                             does not match expected {:02x} {:02x} {:02x}",
+                            self.chip.name,
+                            signature[0],
+                            signature[1],
+                            signature[2],
+                            self.chip.signature[0],
+                            self.chip.signature[1],
+                            self.chip.signature[2],
+                        );
+                        if let Some(actual_chip) = lookup_avr_chip(&signature) {
+                            tracing::info!(
+                                "EDBG AVR: signature matches {}, updating chip descriptor",
+                                actual_chip.name
+                            );
+                            self.chip = actual_chip;
+                        } else {
+                            return Err(EdbgAvrError::UnexpectedResponse {
+                                context: "signature verification",
+                                details: format!(
+                                    "unknown AVR signature: {:02x} {:02x} {:02x}",
+                                    signature[0], signature[1], signature[2]
+                                ),
+                            });
+                        }
+                    }
+
                     return Ok(partial_family_id);
                 }
                 Err(e) => {
@@ -961,6 +1000,10 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn prepare(&mut self) -> Result<(), EdbgAvrError> {
+        if self.prepared {
+            tracing::debug!("EDBG AVR: already prepared, skipping CMSIS-DAP connect");
+            return Ok(());
+        }
         tracing::debug!("EDBG AVR: preparing CMSIS-DAP connection");
         match send_command(self.device.as_mut(), &ConnectRequest::Swd)? {
             ConnectResponse::SuccessfulInitForSWD => {}

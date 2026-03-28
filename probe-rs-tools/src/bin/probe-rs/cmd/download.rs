@@ -186,7 +186,7 @@ fn load_updi_bin_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Resul
     let address =
         u32::try_from(base_address).context("binary base address exceeds 32-bit range")?;
 
-    Ok(merge_flash_blocks(vec![FlashBlock { address, data }]))
+    merge_flash_blocks(vec![FlashBlock { address, data }])
 }
 
 fn load_updi_hex_blocks(path: &PathBuf) -> anyhow::Result<Vec<FlashBlock>> {
@@ -218,7 +218,7 @@ fn load_updi_hex_blocks(path: &PathBuf) -> anyhow::Result<Vec<FlashBlock>> {
         }
     }
 
-    Ok(merge_flash_blocks(blocks))
+    merge_flash_blocks(blocks)
 }
 
 fn load_updi_elf_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Result<Vec<FlashBlock>> {
@@ -263,19 +263,20 @@ fn load_updi_elf_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Resul
         });
     }
 
-    Ok(merge_flash_blocks(blocks))
+    merge_flash_blocks(blocks)
 }
 
-fn merge_flash_blocks(mut blocks: Vec<FlashBlock>) -> Vec<FlashBlock> {
+fn merge_flash_blocks(mut blocks: Vec<FlashBlock>) -> anyhow::Result<Vec<FlashBlock>> {
     blocks.retain(|block| !block.data.is_empty());
     blocks.sort_by_key(|block| block.address);
 
     let mut merged: Vec<FlashBlock> = Vec::new();
     for block in blocks {
         if let Some(previous) = merged.last_mut() {
-            let previous_end = previous
-                .address
-                .saturating_add(u32::try_from(previous.data.len()).unwrap_or(u32::MAX));
+            let previous_end = previous.address.saturating_add(
+                u32::try_from(previous.data.len())
+                    .context("flash block length exceeds 32-bit range")?,
+            );
             if previous_end == block.address {
                 previous.data.extend_from_slice(&block.data);
                 continue;
@@ -284,5 +285,5 @@ fn merge_flash_blocks(mut blocks: Vec<FlashBlock>) -> Vec<FlashBlock> {
         merged.push(block);
     }
 
-    merged
+    Ok(merged)
 }
