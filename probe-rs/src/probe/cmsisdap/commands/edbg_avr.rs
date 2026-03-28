@@ -1043,6 +1043,8 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn receive_payload(&mut self) -> Result<Vec<u8>, EdbgAvrError> {
+        const MAX_SEQUENCE_RETRIES: usize = 16;
+        let mut retries = 0;
         loop {
             let mut collected = Vec::new();
             let mut fragment_count = None;
@@ -1123,6 +1125,17 @@ impl<'a> EdbgAvrTransport<'a> {
 
             let received_sequence = u16::from_le_bytes([collected[1], collected[2]]);
             if received_sequence != self.command_sequence {
+                retries += 1;
+                if retries >= MAX_SEQUENCE_RETRIES {
+                    return Err(EdbgAvrError::UnexpectedResponse {
+                        context: "EDBG receive",
+                        details: format!(
+                            "sequence mismatch after {MAX_SEQUENCE_RETRIES} retries \
+                             (expected {}, got {received_sequence})",
+                            self.command_sequence
+                        ),
+                    });
+                }
                 continue;
             }
 
