@@ -436,7 +436,7 @@ impl<'a> EdbgAvrTransport<'a> {
 
         info.sib_string = trim_ascii_nul(self.read_memory(MTYPE_SIB, 0, AVR_SIBLEN as u32)?);
 
-        self.enter_progmode()?;
+        // Note: enter_progmode() is already called by enter_m4809_programming_session() above.
 
         let chip_revision = self.read_memory(MTYPE_SRAM, M4809_SYSCFG_BASE + 1, 1)?;
         if chip_revision.len() != 1 {
@@ -766,16 +766,32 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn finish_prepare(&mut self) -> Result<(), EdbgAvrError> {
-        let _ = send_command(self.device.as_mut(), &HostStatusRequest::connected(false))?;
-        let DisconnectResponse(status) = send_command(self.device.as_mut(), &DisconnectRequest {})?;
-        if status != Status::DapOk {
-            return Err(EdbgAvrError::UnexpectedResponse {
-                context: "CMSIS-DAP disconnect",
-                details: format!("unexpected disconnect status {status:?}"),
-            });
+        // Best-effort: always attempt DisconnectRequest even if host-status fails,
+        // otherwise the CMSIS-DAP link stays open for the next caller.
+        let mut first_error =
+            send_command(self.device.as_mut(), &HostStatusRequest::connected(false))
+                .map(|_| ())
+                .err()
+                .map(EdbgAvrError::from);
+
+        match send_command(self.device.as_mut(), &DisconnectRequest {}) {
+            Ok(DisconnectResponse(status)) if status == Status::DapOk => {}
+            Ok(DisconnectResponse(status)) => {
+                first_error.get_or_insert(EdbgAvrError::UnexpectedResponse {
+                    context: "CMSIS-DAP disconnect",
+                    details: format!("unexpected disconnect status {status:?}"),
+                });
+            }
+            Err(e) => {
+                first_error.get_or_insert(e.into());
+            }
         }
+
         self.prepared = false;
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     fn general_sign_on(&mut self) -> Result<(), EdbgAvrError> {
