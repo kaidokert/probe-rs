@@ -27,7 +27,7 @@ impl Cmd {
         let selector = DebugProbeSelector::from(&probe);
         let info = query_pkobn_updi_m4809(&selector)?;
 
-        tracing::info!("Probe: {}", probe);
+        println!("Probe: {}", probe);
         print_info(&info);
 
         Ok(())
@@ -95,7 +95,7 @@ pub(crate) fn format_info_lines(info: &PkobnUpdiM4809Info) -> Vec<String> {
 
 pub(crate) fn print_info(info: &PkobnUpdiM4809Info) {
     for line in format_info_lines(info) {
-        tracing::info!("{line}");
+        println!("{line}");
     }
 }
 
