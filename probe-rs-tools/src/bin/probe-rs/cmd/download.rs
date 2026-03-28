@@ -221,10 +221,12 @@ fn load_updi_hex_blocks(path: &PathBuf) -> anyhow::Result<Vec<FlashBlock>> {
     Ok(merge_flash_blocks(blocks))
 }
 
-fn load_updi_elf_blocks(
-    path: &PathBuf,
-    _format: &FormatOptions,
-) -> anyhow::Result<Vec<FlashBlock>> {
+fn load_updi_elf_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Result<Vec<FlashBlock>> {
+    if !format.elf_options.skip_section.is_empty() {
+        tracing::warn!(
+            "--skip-section is ignored for UPDI ELF loading (uses PT_LOAD segments, not sections)"
+        );
+    }
     let contents = std::fs::read(path)
         .with_context(|| format!("Failed to read ELF image '{}'.", path.display()))?;
 

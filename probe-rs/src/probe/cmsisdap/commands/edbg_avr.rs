@@ -472,7 +472,24 @@ pub fn identify_attached_pkobn_updi(
     let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &ATMEGA4809);
     let result = (|| {
         let _ = transport.auto_detect_and_enter()?;
-        Ok(transport.chip)
+        // Verify the chip by reading the production signature, matching what
+        // query_target() does. This guards against multiple descriptors
+        // succeeding sign-on but only one matching the actual device.
+        let prodsig = transport.read_memory(MTYPE_PRODSIG, transport.chip.signature_base, 3)?;
+        if prodsig.len() < 3 {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "chip identification",
+                details: format!("expected at least 3 bytes, got {}", prodsig.len()),
+            });
+        }
+        let signature: [u8; 3] = [prodsig[0], prodsig[1], prodsig[2]];
+        lookup_avr_chip(&signature).ok_or_else(|| EdbgAvrError::UnexpectedResponse {
+            context: "chip identification",
+            details: format!(
+                "unknown AVR signature: {:02x} {:02x} {:02x}",
+                signature[0], signature[1], signature[2]
+            ),
+        })
     })();
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
