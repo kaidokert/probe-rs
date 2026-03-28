@@ -775,7 +775,7 @@ impl<'a> EdbgAvrTransport<'a> {
                 .map(EdbgAvrError::from);
 
         match send_command(self.device.as_mut(), &DisconnectRequest {}) {
-            Ok(DisconnectResponse(status)) if status == Status::DapOk => {}
+            Ok(DisconnectResponse(Status::DapOk)) => {}
             Ok(DisconnectResponse(status)) => {
                 first_error.get_or_insert(EdbgAvrError::UnexpectedResponse {
                     context: "CMSIS-DAP disconnect",
