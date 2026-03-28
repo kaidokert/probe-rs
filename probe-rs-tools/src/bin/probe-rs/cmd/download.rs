@@ -221,7 +221,10 @@ fn load_updi_hex_blocks(path: &PathBuf) -> anyhow::Result<Vec<FlashBlock>> {
     Ok(merge_flash_blocks(blocks))
 }
 
-fn load_updi_elf_blocks(path: &PathBuf, _format: &FormatOptions) -> anyhow::Result<Vec<FlashBlock>> {
+fn load_updi_elf_blocks(
+    path: &PathBuf,
+    _format: &FormatOptions,
+) -> anyhow::Result<Vec<FlashBlock>> {
     let contents = std::fs::read(path)
         .with_context(|| format!("Failed to read ELF image '{}'.", path.display()))?;
 
@@ -230,7 +233,9 @@ fn load_updi_elf_blocks(path: &PathBuf, _format: &FormatOptions) -> anyhow::Resu
     // live in flash (LMA) but are mapped to RAM (VMA).
     let elf_header = FileHeader32::<Endianness>::parse(contents.as_slice())
         .map_err(|_| anyhow::anyhow!("Failed to parse ELF header"))?;
-    let endian = elf_header.endian().context("Failed to determine ELF endianness")?;
+    let endian = elf_header
+        .endian()
+        .context("Failed to determine ELF endianness")?;
     let segments = elf_header
         .program_headers(endian, contents.as_slice())
         .context("Failed to read ELF program headers")?;

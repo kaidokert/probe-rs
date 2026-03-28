@@ -580,7 +580,11 @@ impl<'a> EdbgAvrTransport<'a> {
         let max = total_payload.saturating_sub(overhead);
         // Use a conservative round-down to avoid edge cases; floor to 256-byte boundary.
         let max = (max / 256) * 256;
-        if max == 0 { per_fragment as u32 } else { max as u32 }
+        if max == 0 {
+            per_fragment as u32
+        } else {
+            max as u32
+        }
     }
 
     fn write_flash(&mut self, offset: u32, data: &[u8]) -> Result<(), EdbgAvrError> {

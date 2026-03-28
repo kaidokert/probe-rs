@@ -492,10 +492,6 @@ impl FormatOptions {
     pub(crate) fn bin_skip(&self) -> u32 {
         self.bin_options.skip
     }
-
-    pub(crate) fn elf_skip_sections(&self) -> &[String] {
-        &self.elf_options.skip_section
-    }
 }
 
 /// Determine the default location for the logfile
