@@ -183,8 +183,8 @@ fn load_updi_bin_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Resul
     data.drain(..skip);
 
     let base_address = format.bin_base_address().unwrap_or(0);
-    let address = u32::try_from(base_address + skip as u64)
-        .context("binary base address + skip exceeds 32-bit range")?;
+    let address =
+        u32::try_from(base_address).context("binary base address exceeds 32-bit range")?;
 
     Ok(merge_flash_blocks(vec![FlashBlock { address, data }]))
 }
@@ -232,7 +232,7 @@ fn load_updi_elf_blocks(
     // instead of sections with VMAs. This correctly handles .data initializers that
     // live in flash (LMA) but are mapped to RAM (VMA).
     let elf_header = FileHeader32::<Endianness>::parse(contents.as_slice())
-        .map_err(|_| anyhow::anyhow!("Failed to parse ELF header"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to parse ELF header: {e}"))?;
     let endian = elf_header
         .endian()
         .context("Failed to determine ELF endianness")?;
@@ -248,7 +248,7 @@ fn load_updi_elf_blocks(
 
         let data = segment
             .data(endian, contents.as_slice())
-            .map_err(|_| anyhow::anyhow!("Failed to read ELF segment data"))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read ELF segment data: {e:?}"))?;
         if data.is_empty() {
             continue;
         }

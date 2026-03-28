@@ -169,9 +169,9 @@ enum Subcommand {
     Debug(cmd::debug::Cmd),
     /// Download memory to attached target
     Download(cmd::download::Cmd),
-    /// Experimental: query a Curiosity Nano nEDBG probe in AVR UPDI mode for an ATmega4809 target
+    /// Experimental: query a Curiosity Nano nEDBG probe in AVR UPDI mode
     EdbgAvrInfo(cmd::edbg_avr_info::Cmd),
-    /// Experimental: read from a Curiosity Nano nEDBG probe in AVR UPDI mode for an ATmega4809 target
+    /// Experimental: read from a Curiosity Nano nEDBG probe in AVR UPDI mode
     EdbgAvrRead(cmd::edbg_avr_read::Cmd),
     /// Compare memory to attached target
     Verify(cmd::verify::Cmd),

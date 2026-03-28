@@ -145,7 +145,7 @@ impl Target {
     /// Get the architecture of the target
     pub fn architecture(&self) -> Architecture {
         if self.cores.is_empty() {
-            return match self.debug_sequence {
+            return match &self.debug_sequence {
                 DebugSequence::Arm(_) => Architecture::Arm,
                 DebugSequence::Riscv(_) => Architecture::Riscv,
                 DebugSequence::Xtensa(_) => Architecture::Xtensa,

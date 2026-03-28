@@ -596,6 +596,12 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
                         // -> done in debug_port_connect
                     }
                 }
+                Some(WireProtocol::Updi) => {
+                    return Err(ArmDebugSequenceError::SequenceSpecific(
+                        "UPDI is not supported by ARM debug port setup".into(),
+                    )
+                    .into());
+                }
                 _ => {
                     return Err(ArmDebugSequenceError::SequenceSpecific(
                         "Cannot detect current protocol".into(),

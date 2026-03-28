@@ -295,23 +295,15 @@ pub(crate) fn auto_determine_target(
         let chip_name = {
             let cmsis: Option<&mut CmsisDap> = Probe::try_into(&mut probe);
             match cmsis {
-                Some(cmsis) => match identify_attached_pkobn_updi(cmsis) {
-                    Ok(chip) => {
-                        tracing::info!("UPDI auto-detection identified: {}", chip.name);
-                        chip.name.to_string()
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "UPDI auto-detection failed ({e}), falling back to ATmega4809"
-                        );
-                        "ATmega4809".to_string()
-                    }
-                },
+                Some(cmsis) => {
+                    let chip = identify_attached_pkobn_updi(cmsis)?;
+                    tracing::info!("UPDI auto-detection identified: {}", chip.name);
+                    chip.name.to_string()
+                }
                 None => {
-                    tracing::warn!(
-                        "UPDI auto-detection: probe is not CMSIS-DAP, assuming ATmega4809"
-                    );
-                    "ATmega4809".to_string()
+                    return Err(Error::Other(
+                        "UPDI auto-detection requires a CMSIS-DAP probe".to_string(),
+                    ));
                 }
             }
         };

@@ -655,10 +655,7 @@ impl<'a> EdbgAvrTransport<'a> {
                 Ok(avr_sign_on_response) => {
                     tracing::info!("EDBG AVR: sign-on succeeded with {}", chip.name);
                     self.avr_signed_on = true;
-                    self.chip = KNOWN_AVR_CHIPS
-                        .iter()
-                        .find(|c| c.signature == chip.signature)
-                        .unwrap_or(&ATMEGA4809);
+                    self.chip = chip;
                     let partial_family_id = partial_family_id_from_response(&avr_sign_on_response);
                     self.enter_progmode()?;
                     return Ok(partial_family_id);
@@ -1197,11 +1194,15 @@ impl<'a> EdbgAvrTransport<'a> {
         } else {
             1 + (payload.len() - first_capacity).div_ceil(continuation_capacity)
         };
-        let nfragments_u8 =
-            u8::try_from(nfragments).map_err(|_| EdbgAvrError::UnexpectedResponse {
+        if nfragments > 15 {
+            return Err(EdbgAvrError::UnexpectedResponse {
                 context: "EDBG send",
-                details: format!("payload fragmented into too many packets: {nfragments}"),
-            })?;
+                details: format!(
+                    "payload fragmented into {nfragments} packets, exceeds 4-bit fragment count limit of 15"
+                ),
+            });
+        }
+        let nfragments_u8 = nfragments as u8;
 
         let mut cursor = 0usize;
 

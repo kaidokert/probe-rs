@@ -955,9 +955,11 @@ impl Session {
         match &mut self.interfaces {
             ArchitectureInterface::Avr(probe, chip) => {
                 let region = region.ok_or(Error::NotImplemented("AVR region-aware memory read"))?;
-                let byte_len = count
-                    .checked_mul(width_bytes)
-                    .ok_or_else(|| Error::Other("requested read length overflowed".to_string()))?;
+                let byte_len = count.checked_mul(width_bytes).ok_or_else(|| {
+                    Error::Other(format!(
+                        "requested read length overflowed: {count} * {width_bytes}"
+                    ))
+                })?;
                 let byte_len = u32::try_from(byte_len).map_err(|_| {
                     Error::Other("requested read length exceeds 32-bit range".to_string())
                 })?;
@@ -1052,9 +1054,10 @@ impl Session {
 
     fn decode_words_u16(bytes: &[u8]) -> Result<Vec<u16>, Error> {
         if !bytes.len().is_multiple_of(2) {
-            return Err(Error::Other(
-                "write data length is not aligned to 16-bit width".to_string(),
-            ));
+            return Err(Error::Other(format!(
+                "write data length ({} bytes) is not aligned to 16-bit width",
+                bytes.len()
+            )));
         }
         Ok(bytes
             .chunks_exact(2)
@@ -1064,9 +1067,10 @@ impl Session {
 
     fn decode_words_u32(bytes: &[u8]) -> Result<Vec<u32>, Error> {
         if !bytes.len().is_multiple_of(4) {
-            return Err(Error::Other(
-                "write data length is not aligned to 32-bit width".to_string(),
-            ));
+            return Err(Error::Other(format!(
+                "write data length ({} bytes) is not aligned to 32-bit width",
+                bytes.len()
+            )));
         }
         Ok(bytes
             .chunks_exact(4)
@@ -1076,9 +1080,10 @@ impl Session {
 
     fn decode_words_u64(bytes: &[u8]) -> Result<Vec<u64>, Error> {
         if !bytes.len().is_multiple_of(8) {
-            return Err(Error::Other(
-                "write data length is not aligned to 64-bit width".to_string(),
-            ));
+            return Err(Error::Other(format!(
+                "write data length ({} bytes) is not aligned to 64-bit width",
+                bytes.len()
+            )));
         }
         Ok(bytes
             .chunks_exact(8)
