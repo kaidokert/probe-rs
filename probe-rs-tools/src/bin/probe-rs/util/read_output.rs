@@ -40,8 +40,12 @@ impl OutputFormat {
         data: &[u8],
         path: &Path,
     ) -> anyhow::Result<()> {
-        let mut file = std::fs::File::create(path)?;
-        self.write(&mut file, address, width, data)
+        // Write to an in-memory buffer first so we don't truncate the output
+        // file if format validation or serialization fails.
+        let mut buf = Vec::new();
+        self.write(&mut buf, address, width, data)?;
+        std::fs::write(path, &buf)?;
+        Ok(())
     }
 
     pub(crate) fn print_to_console(

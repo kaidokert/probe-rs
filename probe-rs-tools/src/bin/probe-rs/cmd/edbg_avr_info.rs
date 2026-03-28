@@ -133,11 +133,15 @@ pub(crate) fn select_probe_for_edbg(
         };
     }
 
-    let list = lister.list_all();
+    let list: Vec<_> = lister
+        .list_all()
+        .into_iter()
+        .filter(|p| p.vendor_id == 0x03eb && p.product_id == 0x2175)
+        .collect();
     match list.as_slice() {
-        [] => bail!("No probes found"),
+        [] => bail!("No EDBG-compatible probes found (expected VID:PID 03eb:2175)"),
         [probe] => Ok(probe.clone()),
-        _ if non_interactive => bail!("Multiple probes found"),
+        _ if non_interactive => bail!("Multiple EDBG-compatible probes found"),
         _ => interactive_probe_select(&list),
     }
 }

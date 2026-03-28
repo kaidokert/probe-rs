@@ -242,11 +242,7 @@ pub fn query_pkobn_updi_m4809(
         detected_part: None,
     });
 
-    if let Err(e) = transport.cleanup() {
-        tracing::warn!("EDBG AVR transport cleanup failed: {e}");
-    }
-
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Read bytes from a narrow `ATmega4809` UPDI memory region.
@@ -262,8 +258,7 @@ pub fn read_pkobn_updi_m4809_region(
         transport.read_region(region, offset, length)
     })();
 
-    let _ = transport.cleanup();
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Read bytes from a narrow `ATmega4809` UPDI memory region using an already-open CMSIS-DAP probe.
@@ -279,8 +274,7 @@ pub fn read_attached_pkobn_updi_m4809_region(
         transport.read_region(region, offset, length)
     })();
 
-    let _ = transport.cleanup();
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Erase the narrow `ATmega4809` target through the EDBG AVR chip erase command using an
@@ -294,8 +288,7 @@ pub fn erase_attached_pkobn_updi_m4809(
         transport.erase_chip()
     })();
 
-    let _ = transport.cleanup();
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Write bytes into narrow `ATmega4809` flash memory using page programming through an
@@ -311,8 +304,7 @@ pub fn write_attached_pkobn_updi_m4809_flash(
         transport.write_flash(offset, data)
     })();
 
-    let _ = transport.cleanup();
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Write bytes into narrow `ATmega4809` flash memory using page programming.
@@ -327,8 +319,7 @@ pub fn write_pkobn_updi_m4809_flash(
         transport.write_flash(offset, data)
     })();
 
-    let _ = transport.cleanup();
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Erase the narrow `ATmega4809` target through the EDBG AVR chip erase command.
@@ -339,8 +330,7 @@ pub fn erase_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), Debug
         transport.erase_chip()
     })();
 
-    let _ = transport.cleanup();
-    result.map_err(DebugProbeError::from)
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 /// Reset a Microchip `pkobn_updi` / `03eb:2175` probe through the generic CMSIS-DAP reset command.
@@ -557,7 +547,40 @@ impl<'a> EdbgAvrTransport<'a> {
             });
         }
 
-        self.read_memory(memory_type, base + offset, length)
+        // The EDBG protocol encodes fragment counts in nibbles (max 15).
+        // Large reads must be chunked to stay within the response fragment limit.
+        let max_chunk = self.max_read_length();
+        if length <= max_chunk {
+            return self.read_memory(memory_type, base + offset, length);
+        }
+
+        let mut result = Vec::with_capacity(length as usize);
+        let mut remaining = length;
+        let mut addr = base + offset;
+        while remaining > 0 {
+            let chunk = remaining.min(max_chunk);
+            result.extend_from_slice(&self.read_memory(memory_type, addr, chunk)?);
+            addr += chunk;
+            remaining -= chunk;
+        }
+        Ok(result)
+    }
+
+    /// Maximum number of bytes that can be read in a single `read_memory` call
+    /// without exceeding the EDBG 15-fragment response limit.
+    fn max_read_length(&self) -> u32 {
+        let packet_size = self.packet_size();
+        // Each response fragment carries (packet_size - 4) bytes of reassembled payload.
+        // The first 3 bytes of the reassembled payload are TOKEN + sequence(2).
+        // read_memory response has 3 header bytes (scope, rsp_type, 0) before data.
+        // So usable data = 15 * (packet_size - 4) - 3 (token+seq) - 3 (response header).
+        let per_fragment = packet_size.saturating_sub(4);
+        let total_payload = 15 * per_fragment;
+        let overhead = 6; // 3 for token+seq, 3 for read_memory response header
+        let max = total_payload.saturating_sub(overhead);
+        // Use a conservative round-down to avoid edge cases; floor to 256-byte boundary.
+        let max = (max / 256) * 256;
+        if max == 0 { per_fragment as u32 } else { max as u32 }
     }
 
     fn write_flash(&mut self, offset: u32, data: &[u8]) -> Result<(), EdbgAvrError> {
@@ -730,9 +753,11 @@ impl<'a> EdbgAvrTransport<'a> {
             }
         }
 
-        let _ = send_command(self.device.as_mut(), &HostStatusRequest::connected(true))?;
+        // Mark prepared before host-status so cleanup() will disconnect
+        // even if the host-status call fails.
         self.prepared = true;
         self.cleanup_prepare = true;
+        let _ = send_command(self.device.as_mut(), &HostStatusRequest::connected(true))?;
         Ok(())
     }
 
@@ -1133,6 +1158,26 @@ impl<'a> EdbgAvrTransport<'a> {
             CmsisDapDevice::V2 {
                 max_packet_size, ..
             } => *max_packet_size,
+        }
+    }
+}
+
+/// Run cleanup on the transport and combine any cleanup error with the main result.
+/// If both the main operation and cleanup fail, the main error takes priority and
+/// the cleanup error is logged as a warning.
+fn finish_transport<T>(
+    transport: &mut EdbgAvrTransport<'_>,
+    result: Result<T, EdbgAvrError>,
+) -> Result<T, EdbgAvrError> {
+    match transport.cleanup() {
+        Ok(()) => result,
+        Err(cleanup_err) => {
+            if result.is_err() {
+                tracing::warn!("EDBG AVR transport cleanup also failed: {cleanup_err}");
+                result
+            } else {
+                Err(cleanup_err)
+            }
         }
     }
 }

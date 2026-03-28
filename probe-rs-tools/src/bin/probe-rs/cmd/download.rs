@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use object::{Object, ObjectSection, SectionKind};
+use object::Endianness;
+use object::elf::{FileHeader32, PT_LOAD};
+use object::read::elf::{FileHeader as _, ProgramHeader as _};
 
 use crate::rpc::client::RpcClient;
 use crate::rpc::functions::memory::AvrMemoryRegion as RpcAvrMemoryRegion;
@@ -219,48 +221,34 @@ fn load_updi_hex_blocks(path: &PathBuf) -> anyhow::Result<Vec<FlashBlock>> {
     Ok(merge_flash_blocks(blocks))
 }
 
-fn load_updi_elf_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Result<Vec<FlashBlock>> {
+fn load_updi_elf_blocks(path: &PathBuf, _format: &FormatOptions) -> anyhow::Result<Vec<FlashBlock>> {
     let contents = std::fs::read(path)
         .with_context(|| format!("Failed to read ELF image '{}'.", path.display()))?;
-    let object = object::File::parse(contents.as_slice()).context("Failed to parse ELF file")?;
+
+    // Use raw ELF program headers (PT_LOAD segments) with physical addresses (LMAs)
+    // instead of sections with VMAs. This correctly handles .data initializers that
+    // live in flash (LMA) but are mapped to RAM (VMA).
+    let elf_header = FileHeader32::<Endianness>::parse(contents.as_slice())
+        .map_err(|_| anyhow::anyhow!("Failed to parse ELF header"))?;
+    let endian = elf_header.endian().context("Failed to determine ELF endianness")?;
+    let segments = elf_header
+        .program_headers(endian, contents.as_slice())
+        .context("Failed to read ELF program headers")?;
 
     let mut blocks = Vec::new();
-    for section in object.sections() {
-        let section_name = section
-            .name()
-            .context("Failed to read ELF section name")?
-            .to_string();
-        if format
-            .elf_skip_sections()
-            .iter()
-            .any(|skip| skip == &section_name)
-        {
+    for segment in segments {
+        if segment.p_type(endian) != PT_LOAD {
             continue;
         }
 
-        if matches!(
-            section.kind(),
-            SectionKind::Metadata
-                | SectionKind::Other
-                | SectionKind::OtherString
-                | SectionKind::Unknown
-                | SectionKind::UninitializedData
-                | SectionKind::UninitializedTls
-                | SectionKind::Note
-        ) {
-            continue;
-        }
-
-        let data = section.data().with_context(|| {
-            format!("Failed to read ELF section data for section '{section_name}'.")
-        })?;
+        let data = segment
+            .data(endian, contents.as_slice())
+            .map_err(|_| anyhow::anyhow!("Failed to read ELF segment data"))?;
         if data.is_empty() {
             continue;
         }
 
-        let address = u32::try_from(section.address()).with_context(|| {
-            format!("ELF section '{section_name}' address exceeds 32-bit range.")
-        })?;
+        let address: u32 = segment.p_paddr(endian);
 
         blocks.push(FlashBlock {
             address,

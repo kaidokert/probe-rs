@@ -62,6 +62,7 @@ impl Cmd {
 
             let mut successes = vec![];
             let mut errors = vec![];
+            let mut probe_succeeded = false;
 
             let req = TargetInfoRequest {
                 target_sel: self.target_sel,
@@ -84,6 +85,7 @@ impl Cmd {
                     }
 
                     if is_success {
+                        probe_succeeded = true;
                         successes.push(message);
                     } else {
                         errors.push(message);
@@ -96,13 +98,13 @@ impl Cmd {
                 println!("Error while probing target: {error}");
             }
 
-            if successes.is_empty() {
-                for message in errors {
+            if probe_succeeded {
+                had_success = true;
+                for message in successes {
                     println!("{message}");
                 }
             } else {
-                had_success = true;
-                for message in successes {
+                for message in errors {
                     println!("{message}");
                 }
             }
