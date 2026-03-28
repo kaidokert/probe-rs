@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use probe_rs::probe::{
     DebugProbeSelector,
-    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_m4809_region},
+    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_region},
     list::Lister,
 };
 
@@ -97,7 +97,7 @@ impl Cmd {
         let offset = u32::try_from(self.read_write_options.address)
             .context("region-relative AVR address exceeds 32-bit range")?;
 
-        let data = read_pkobn_updi_m4809_region(&selector, region, offset, byte_len)?;
+        let data = read_pkobn_updi_region(&selector, region, offset, byte_len)?;
 
         match self.output {
             Some(path) => self.format.save_to_file(

@@ -22,8 +22,8 @@ use crate::{
     probe::{
         AttachMethod, DebugProbeError, Probe, ProbeCreationError, WireProtocol,
         cmsisdap::{
-            AvrMemoryRegion, CmsisDap, erase_attached_pkobn_updi_m4809,
-            read_attached_pkobn_updi_m4809_region, write_attached_pkobn_updi_m4809_flash,
+            AvrChipDescriptor, AvrMemoryRegion, CmsisDap, erase_attached_pkobn_updi,
+            read_attached_pkobn_updi_region, write_attached_pkobn_updi_flash,
         },
         fake_probe::FakeProbe,
         list::Lister,
@@ -106,7 +106,7 @@ impl fmt::Debug for JtagInterface {
 enum ArchitectureInterface {
     Arm(Box<dyn ArmDebugInterface + 'static>),
     Jtag(Probe, Vec<JtagInterface>),
-    Avr(Probe),
+    Avr(Probe, &'static AvrChipDescriptor),
 }
 
 impl fmt::Debug for ArchitectureInterface {
@@ -117,7 +117,7 @@ impl fmt::Debug for ArchitectureInterface {
                 .debug_tuple("ArchitectureInterface::Jtag(..)")
                 .field(ifaces)
                 .finish(),
-            ArchitectureInterface::Avr(_) => f.write_str("ArchitectureInterface::Avr(..)"),
+            ArchitectureInterface::Avr(_, _) => f.write_str("ArchitectureInterface::Avr(..)"),
         }
     }
 }
@@ -152,7 +152,7 @@ impl ArchitectureInterface {
                     }
                 }
             }
-            ArchitectureInterface::Avr(_) => Err(Error::NotImplemented("AVR core attach")),
+            ArchitectureInterface::Avr(_, _) => Err(Error::NotImplemented("AVR core attach")),
         }
     }
 }
@@ -203,9 +203,14 @@ impl Session {
     }
 
     fn attach_avr_stub(probe: Probe, target: Target) -> Result<Self, Error> {
+        use crate::probe::cmsisdap::{ATMEGA4809, KNOWN_AVR_CHIPS};
+        let chip: &'static AvrChipDescriptor = KNOWN_AVR_CHIPS
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&target.name))
+            .unwrap_or(&ATMEGA4809);
         Ok(Session {
             target,
-            interfaces: ArchitectureInterface::Avr(probe),
+            interfaces: ArchitectureInterface::Avr(probe, chip),
             cores: Vec::new(),
             configured_trace_sink: None,
         })
@@ -809,11 +814,11 @@ impl Session {
     /// programmer-style chip erase.
     pub fn erase_all(&mut self) -> Result<(), Error> {
         match &mut self.interfaces {
-            ArchitectureInterface::Avr(probe) => {
+            ArchitectureInterface::Avr(probe, chip) => {
                 let cmsis = probe
                     .try_into::<CmsisDap>()
                     .ok_or(Error::NotImplemented("AVR CMSIS-DAP session erase"))?;
-                erase_attached_pkobn_updi_m4809(cmsis).map_err(Error::from)
+                erase_attached_pkobn_updi(cmsis, chip).map_err(Error::from)
             }
             _ => Err(Error::NotImplemented(
                 "Session erase-all is only implemented for AVR local sessions.",
@@ -915,14 +920,14 @@ impl Session {
                     Architecture::Xtensa
                 }
             }
-            ArchitectureInterface::Avr(_) => Architecture::Avr,
+            ArchitectureInterface::Avr(_, _) => Architecture::Avr,
         }
     }
 
     /// Reset the target using either the selected core or the probe-level reset for AVR.
     pub fn reset(&mut self, core_index: usize) -> Result<(), Error> {
         match &mut self.interfaces {
-            ArchitectureInterface::Avr(probe) => probe.target_reset().map_err(Error::from),
+            ArchitectureInterface::Avr(probe, _) => probe.target_reset().map_err(Error::from),
             _ => self.core(core_index)?.reset(),
         }
     }
@@ -930,7 +935,7 @@ impl Session {
     /// Reset and halt the selected core when the architecture supports it.
     pub fn reset_and_halt(&mut self, core_index: usize, timeout: Duration) -> Result<(), Error> {
         match &mut self.interfaces {
-            ArchitectureInterface::Avr(_) => Err(Error::NotImplemented("AVR reset-and-halt")),
+            ArchitectureInterface::Avr(_, _) => Err(Error::NotImplemented("AVR reset-and-halt")),
             _ => {
                 self.core(core_index)?.reset_and_halt(timeout)?;
                 Ok(())
@@ -948,7 +953,7 @@ impl Session {
         region: Option<AvrMemoryRegion>,
     ) -> Result<Vec<u8>, Error> {
         match &mut self.interfaces {
-            ArchitectureInterface::Avr(probe) => {
+            ArchitectureInterface::Avr(probe, chip) => {
                 let region = region.ok_or(Error::NotImplemented("AVR region-aware memory read"))?;
                 let byte_len = count
                     .checked_mul(width_bytes)
@@ -962,7 +967,7 @@ impl Session {
                 let cmsis = probe
                     .try_into::<CmsisDap>()
                     .ok_or(Error::NotImplemented("AVR CMSIS-DAP session read"))?;
-                read_attached_pkobn_updi_m4809_region(cmsis, region, offset, byte_len)
+                read_attached_pkobn_updi_region(cmsis, chip, region, offset, byte_len)
                     .map_err(Error::from)
             }
             _ => {
@@ -1007,7 +1012,7 @@ impl Session {
         region: Option<AvrMemoryRegion>,
     ) -> Result<(), Error> {
         match &mut self.interfaces {
-            ArchitectureInterface::Avr(probe) => {
+            ArchitectureInterface::Avr(probe, chip) => {
                 let region =
                     region.ok_or(Error::NotImplemented("AVR region-aware memory write"))?;
                 if region != AvrMemoryRegion::Flash {
@@ -1021,7 +1026,7 @@ impl Session {
                 let cmsis = probe
                     .try_into::<CmsisDap>()
                     .ok_or(Error::NotImplemented("AVR CMSIS-DAP session write"))?;
-                write_attached_pkobn_updi_m4809_flash(cmsis, offset, data).map_err(Error::from)
+                write_attached_pkobn_updi_flash(cmsis, chip, offset, data).map_err(Error::from)
             }
             _ => {
                 let mut core = self.core(core_index)?;

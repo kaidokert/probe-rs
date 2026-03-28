@@ -23,7 +23,7 @@ use probe_rs::{
             XtensaCommunicationInterface, XtensaDebugInterfaceState,
         },
     },
-    probe::{Probe, WireProtocol as ProbeRsWireProtocol, cmsisdap::query_pkobn_updi_m4809},
+    probe::{Probe, WireProtocol as ProbeRsWireProtocol, cmsisdap::query_pkobn_updi},
 };
 use serde::{Deserialize, Serialize};
 
@@ -305,7 +305,7 @@ async fn try_show_info(
         let selector: probe_rs::probe::DebugProbeSelector = probe_entry.selector().into();
         drop(probe);
 
-        let info = query_pkobn_updi_m4809(&selector)?;
+        let info = query_pkobn_updi(&selector)?;
         ctx.publish::<TargetInfoDataTopic>(
             VarSeq::Seq2(0),
             &InfoEvent::Message(format!("Probe: {probe_entry}")),

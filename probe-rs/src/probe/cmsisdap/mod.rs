@@ -2,10 +2,10 @@
 mod commands;
 mod tools;
 pub use self::commands::edbg_avr::{
-    AvrMemoryRegion, IceFirmwareVersion, PkobnUpdiM4809Info, erase_attached_pkobn_updi_m4809,
-    erase_pkobn_updi_m4809, query_pkobn_updi_m4809, read_attached_pkobn_updi_m4809_region,
-    read_pkobn_updi_m4809_region, reset_pkobn_updi_m4809, write_attached_pkobn_updi_m4809_flash,
-    write_pkobn_updi_m4809_flash,
+    ATMEGA4809, AvrChipDescriptor, AvrMemoryRegion, IceFirmwareVersion, KNOWN_AVR_CHIPS,
+    PkobnUpdiInfo, erase_attached_pkobn_updi, erase_pkobn_updi, identify_attached_pkobn_updi,
+    query_pkobn_updi, read_attached_pkobn_updi_region, read_pkobn_updi_region, reset_pkobn_updi,
+    write_attached_pkobn_updi_flash, write_pkobn_updi_flash,
 };
 
 use crate::{

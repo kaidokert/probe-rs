@@ -290,13 +290,34 @@ pub(crate) fn auto_determine_target(
     let mut found_target = None;
 
     if probe.protocol() == Some(WireProtocol::Updi) {
-        // TODO: Query the device signature/SIB to resolve the actual target instead of
-        // hardcoding ATmega4809.  For now, this narrow path only supports a single device.
-        tracing::warn!(
-            "UPDI auto-detection is limited: assuming ATmega4809 (signature check not yet implemented)"
-        );
+        use crate::probe::cmsisdap::{CmsisDap, identify_attached_pkobn_updi};
+
+        let chip_name = {
+            let cmsis: Option<&mut CmsisDap> = Probe::try_into(&mut probe);
+            match cmsis {
+                Some(cmsis) => match identify_attached_pkobn_updi(cmsis) {
+                    Ok(chip) => {
+                        tracing::info!("UPDI auto-detection identified: {}", chip.name);
+                        chip.name.to_string()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "UPDI auto-detection failed ({e}), falling back to ATmega4809"
+                        );
+                        "ATmega4809".to_string()
+                    }
+                },
+                None => {
+                    tracing::warn!(
+                        "UPDI auto-detection: probe is not CMSIS-DAP, assuming ATmega4809"
+                    );
+                    "ATmega4809".to_string()
+                }
+            }
+        };
+
         let target = Target {
-            name: "ATmega4809".to_string(),
+            name: chip_name,
             cores: vec![],
             flash_algorithms: vec![],
             memory_map: vec![],

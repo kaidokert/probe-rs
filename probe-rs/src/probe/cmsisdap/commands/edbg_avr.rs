@@ -73,24 +73,139 @@ const DEFAULT_MINIMUM_CHARACTERISED_DIV2_VOLTAGE_MV: u16 = 2700;
 const DEFAULT_MINIMUM_CHARACTERISED_DIV4_VOLTAGE_MV: u16 = 2200;
 const DEFAULT_MINIMUM_CHARACTERISED_DIV8_VOLTAGE_MV: u16 = 1500;
 const MAX_FREQUENCY_SHARED_UPDI_PIN: u16 = 750;
-const UPDI_ADDRESS_MODE_16BIT: u8 = 0;
 const FUSES_SYSCFG0_OFFSET: u8 = 5;
 
 const AVR_SIBLEN: usize = 32;
-const M4809_FLASH_PAGE_SIZE: u32 = 128;
-const M4809_FLASH_SIZE: u32 = 0xc000;
-const M4809_EEPROM_BASE: u32 = 0x1400;
-const M4809_EEPROM_SIZE: u32 = 256;
-const M4809_FUSES_BASE: u32 = 0x1280;
-const M4809_FUSES_SIZE: u32 = 10;
-const M4809_LOCK_BASE: u32 = 0x128a;
-const M4809_LOCK_SIZE: u32 = 1;
-const M4809_SIGNATURE: [u8; 3] = [0x1e, 0x96, 0x51];
-const M4809_SIGNATURE_BASE: u32 = 0x1100;
-const M4809_PRODSIG_SIZE: u32 = 128;
-const M4809_SYSCFG_BASE: u32 = 0x0f00;
-const M4809_USERROW_BASE: u32 = 0x1300;
-const M4809_USERROW_SIZE: u32 = 64;
+
+/// Device-specific parameters for a UPDI-attached AVR chip.
+#[derive(Debug, Clone)]
+pub struct AvrChipDescriptor {
+    /// Human-readable chip name (e.g. "ATmega4809").
+    pub name: &'static str,
+    /// Three-byte device signature read from production signature row.
+    pub signature: [u8; 3],
+    /// Flash memory base address in the data space.
+    pub flash_base: u32,
+    /// Flash memory size in bytes.
+    pub flash_size: u32,
+    /// Flash page size in bytes.
+    pub flash_page_size: u32,
+    /// EEPROM base address in the data space.
+    pub eeprom_base: u32,
+    /// EEPROM size in bytes.
+    pub eeprom_size: u32,
+    /// EEPROM page size in bytes (for page-write granularity).
+    pub eeprom_page_size: u8,
+    /// Fuse region base address.
+    pub fuses_base: u32,
+    /// Number of fuse bytes.
+    pub fuses_size: u32,
+    /// Lock bit region base address.
+    pub lock_base: u32,
+    /// Lock region size in bytes.
+    pub lock_size: u32,
+    /// User row (USERROW) base address.
+    pub userrow_base: u32,
+    /// User row size in bytes.
+    pub userrow_size: u32,
+    /// Signature / production signature row base address.
+    pub signature_base: u32,
+    /// Production signature row size in bytes.
+    pub prodsig_size: u32,
+    /// NVM controller base address.
+    pub nvm_base: u16,
+    /// OCD (on-chip debug) module base address.
+    pub ocd_base: u16,
+    /// SYSCFG peripheral base address.
+    pub syscfg_base: u32,
+    /// Address mode: 0 = 16-bit, 1 = 24-bit.
+    pub address_mode: u8,
+    /// HVUPDI variant identifier sent in the device descriptor.
+    pub hvupdi_variant: u8,
+}
+
+/// Chip descriptor for the ATmega4809 (megaAVR 0-series, 48 KB flash).
+pub const ATMEGA4809: AvrChipDescriptor = AvrChipDescriptor {
+    name: "ATmega4809",
+    signature: [0x1e, 0x96, 0x51],
+    flash_base: 0x4000,
+    flash_size: 0xC000,
+    flash_page_size: 128,
+    eeprom_base: 0x1400,
+    eeprom_size: 256,
+    eeprom_page_size: 64,
+    fuses_base: 0x1280,
+    fuses_size: 10,
+    lock_base: 0x128A,
+    lock_size: 1,
+    userrow_base: 0x1300,
+    userrow_size: 64,
+    signature_base: 0x1100,
+    prodsig_size: 128,
+    nvm_base: 0x1000,
+    ocd_base: 0x0F80,
+    syscfg_base: 0x0F00,
+    address_mode: 0,
+    hvupdi_variant: 1,
+};
+
+/// Chip descriptor for the AVR128DB48 (AVR DB-series, 128 KB flash).
+pub const AVR128DB48: AvrChipDescriptor = AvrChipDescriptor {
+    name: "AVR128DB48",
+    signature: [0x1e, 0x97, 0x0c],
+    flash_base: 0x800000,
+    flash_size: 0x20000,
+    flash_page_size: 512,
+    eeprom_base: 0x1400,
+    eeprom_size: 512,
+    eeprom_page_size: 1,
+    fuses_base: 0x1050,
+    fuses_size: 16,
+    lock_base: 0x1040,
+    lock_size: 4,
+    userrow_base: 0x1080,
+    userrow_size: 32,
+    signature_base: 0x1100,
+    prodsig_size: 128,
+    nvm_base: 0x1000,
+    ocd_base: 0x0F80,
+    syscfg_base: 0x0F00,
+    address_mode: 1,
+    hvupdi_variant: 1,
+};
+
+/// Chip descriptor for the AVR64EA48 (AVR EA-series, 64 KB flash).
+pub const AVR64EA48: AvrChipDescriptor = AvrChipDescriptor {
+    name: "AVR64EA48",
+    signature: [0x1e, 0x96, 0x1e],
+    flash_base: 0x800000,
+    flash_size: 0x10000,
+    flash_page_size: 128,
+    eeprom_base: 0x1400,
+    eeprom_size: 512,
+    eeprom_page_size: 8,
+    fuses_base: 0x1050,
+    fuses_size: 16,
+    lock_base: 0x1040,
+    lock_size: 4,
+    userrow_base: 0x1080,
+    userrow_size: 64,
+    signature_base: 0x1100,
+    prodsig_size: 128,
+    nvm_base: 0x1000,
+    ocd_base: 0x0F80,
+    syscfg_base: 0x0F00,
+    address_mode: 1,
+    hvupdi_variant: 2,
+};
+
+/// All known AVR UPDI chip descriptors, tried in order during auto-detection.
+pub const KNOWN_AVR_CHIPS: &[AvrChipDescriptor] = &[ATMEGA4809, AVR128DB48, AVR64EA48];
+
+/// Look up a chip descriptor by its three-byte device signature.
+pub fn lookup_avr_chip(signature: &[u8; 3]) -> Option<&'static AvrChipDescriptor> {
+    KNOWN_AVR_CHIPS.iter().find(|c| &c.signature == signature)
+}
 
 /// Firmware version reported by the EDBG/JTAG3 general parameter block.
 #[derive(Debug, Clone)]
@@ -105,9 +220,9 @@ pub struct IceFirmwareVersion {
     pub release: u16,
 }
 
-/// Narrow information block returned by the experimental `pkobn_updi` + `m4809` query path.
+/// Narrow information block returned by the experimental `pkobn_updi` query path.
 #[derive(Debug, Clone)]
-pub struct PkobnUpdiM4809Info {
+pub struct PkobnUpdiInfo {
     /// Probe selector used to open the probe.
     pub probe_selector: DebugProbeSelector,
     /// CMSIS-DAP vendor string.
@@ -144,11 +259,11 @@ pub struct PkobnUpdiM4809Info {
     pub userrow: Vec<u8>,
     /// Raw production signature bytes.
     pub prodsig: Vec<u8>,
-    /// Resolved part name when the signature matches the hardcoded target.
-    pub detected_part: Option<&'static str>,
+    /// Resolved chip descriptor when the signature matches a known target.
+    pub chip: Option<&'static AvrChipDescriptor>,
 }
 
-/// Memory region within the narrow `ATmega4809` UPDI implementation.
+/// Memory region within the narrow AVR UPDI implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvrMemoryRegion {
     /// Flash memory, addressed relative to the start of flash.
@@ -191,10 +306,8 @@ pub enum EdbgAvrError {
 
 impl ProbeError for EdbgAvrError {}
 
-/// Query a Microchip `pkobn_updi` / `03eb:2175` probe for a hardcoded `ATmega4809` target.
-pub fn query_pkobn_updi_m4809(
-    selector: &DebugProbeSelector,
-) -> Result<PkobnUpdiM4809Info, DebugProbeError> {
+/// Query a Microchip `pkobn_updi` / `03eb:2175` probe with auto-detected AVR target.
+pub fn query_pkobn_updi(selector: &DebugProbeSelector) -> Result<PkobnUpdiInfo, DebugProbeError> {
     if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
         return Err(EdbgAvrError::UnsupportedProbe {
             selector: selector.clone(),
@@ -215,7 +328,7 @@ pub fn query_pkobn_updi_m4809(
 
     let mut transport = EdbgAvrTransport::new(device);
 
-    let result = transport.query_target(PkobnUpdiM4809Info {
+    let result = transport.query_target(PkobnUpdiInfo {
         probe_selector: selector.clone(),
         cmsis_dap_vendor,
         cmsis_dap_product,
@@ -239,14 +352,14 @@ pub fn query_pkobn_updi_m4809(
         fuses: vec![],
         userrow: vec![],
         prodsig: vec![],
-        detected_part: None,
+        chip: None,
     });
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Read bytes from a narrow `ATmega4809` UPDI memory region.
-pub fn read_pkobn_updi_m4809_region(
+/// Read bytes from an AVR UPDI memory region.
+pub fn read_pkobn_updi_region(
     selector: &DebugProbeSelector,
     region: AvrMemoryRegion,
     offset: u32,
@@ -254,79 +367,82 @@ pub fn read_pkobn_updi_m4809_region(
 ) -> Result<Vec<u8>, DebugProbeError> {
     let mut transport = open_pkobn_transport(selector)?;
     let result = (|| {
-        let _ = transport.enter_m4809_programming_session()?;
+        let _ = transport.auto_detect_and_enter()?;
         transport.read_region(region, offset, length)
     })();
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Read bytes from a narrow `ATmega4809` UPDI memory region using an already-open CMSIS-DAP probe.
-pub fn read_attached_pkobn_updi_m4809_region(
+/// Read bytes from an AVR UPDI memory region using an already-open CMSIS-DAP probe.
+pub fn read_attached_pkobn_updi_region(
     probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
     region: AvrMemoryRegion,
     offset: u32,
     length: u32,
 ) -> Result<Vec<u8>, DebugProbeError> {
-    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device);
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, chip);
     let result = (|| {
-        let _ = transport.enter_m4809_programming_session()?;
+        let _ = transport.enter_programming_session()?;
         transport.read_region(region, offset, length)
     })();
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Erase the narrow `ATmega4809` target through the EDBG AVR chip erase command using an
+/// Erase the AVR target through the EDBG AVR chip erase command using an
 /// already-open CMSIS-DAP probe.
-pub fn erase_attached_pkobn_updi_m4809(
+pub fn erase_attached_pkobn_updi(
     probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
 ) -> Result<(), DebugProbeError> {
-    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device);
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, chip);
     let result = (|| {
-        let _ = transport.enter_m4809_programming_session()?;
+        let _ = transport.enter_programming_session()?;
         transport.erase_chip()
     })();
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Write bytes into narrow `ATmega4809` flash memory using page programming through an
+/// Write bytes into AVR flash memory using page programming through an
 /// already-open CMSIS-DAP probe.
-pub fn write_attached_pkobn_updi_m4809_flash(
+pub fn write_attached_pkobn_updi_flash(
     probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
     offset: u32,
     data: &[u8],
 ) -> Result<(), DebugProbeError> {
-    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device);
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, chip);
     let result = (|| {
-        let _ = transport.enter_m4809_programming_session()?;
+        let _ = transport.enter_programming_session()?;
         transport.write_flash(offset, data)
     })();
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Write bytes into narrow `ATmega4809` flash memory using page programming.
-pub fn write_pkobn_updi_m4809_flash(
+/// Write bytes into AVR flash memory using page programming.
+pub fn write_pkobn_updi_flash(
     selector: &DebugProbeSelector,
     offset: u32,
     data: &[u8],
 ) -> Result<(), DebugProbeError> {
     let mut transport = open_pkobn_transport(selector)?;
     let result = (|| {
-        let _ = transport.enter_m4809_programming_session()?;
+        let _ = transport.auto_detect_and_enter()?;
         transport.write_flash(offset, data)
     })();
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Erase the narrow `ATmega4809` target through the EDBG AVR chip erase command.
-pub fn erase_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
+/// Erase the AVR target through the EDBG AVR chip erase command.
+pub fn erase_pkobn_updi(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
     let mut transport = open_pkobn_transport(selector)?;
     let result = (|| {
-        let _ = transport.enter_m4809_programming_session()?;
+        let _ = transport.auto_detect_and_enter()?;
         transport.erase_chip()
     })();
 
@@ -334,7 +450,7 @@ pub fn erase_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), Debug
 }
 
 /// Reset a Microchip `pkobn_updi` / `03eb:2175` probe through the generic CMSIS-DAP reset command.
-pub fn reset_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
+pub fn reset_pkobn_updi(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
     if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
         return Err(EdbgAvrError::UnsupportedProbe {
             selector: selector.clone(),
@@ -347,6 +463,18 @@ pub fn reset_pkobn_updi_m4809(selector: &DebugProbeSelector) -> Result<(), Debug
     let _ = device.find_packet_size()?;
     let _ = send_command(&mut device, &ResetRequest {})? as ResetResponse;
     Ok(())
+}
+
+/// Identify the AVR chip attached to a CMSIS-DAP probe by trying each known descriptor.
+pub fn identify_attached_pkobn_updi(
+    probe: &mut super::super::CmsisDap,
+) -> Result<&'static AvrChipDescriptor, DebugProbeError> {
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &ATMEGA4809);
+    let result = (|| {
+        let _ = transport.auto_detect_and_enter()?;
+        Ok(transport.chip)
+    })();
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
 fn open_pkobn_transport(
@@ -394,6 +522,7 @@ struct EdbgAvrTransport<'a> {
     general_signed_on: bool,
     avr_signed_on: bool,
     programming_enabled: bool,
+    chip: &'static AvrChipDescriptor,
 }
 
 impl EdbgAvrTransport<'static> {
@@ -406,12 +535,16 @@ impl EdbgAvrTransport<'static> {
             general_signed_on: false,
             avr_signed_on: false,
             programming_enabled: false,
+            chip: &ATMEGA4809,
         }
     }
 }
 
 impl<'a> EdbgAvrTransport<'a> {
-    fn from_attached_device(device: &'a mut CmsisDapDevice) -> Self {
+    fn from_attached_device(
+        device: &'a mut CmsisDapDevice,
+        chip: &'static AvrChipDescriptor,
+    ) -> Self {
         Self {
             device: TransportDevice::Borrowed(device),
             command_sequence: 0,
@@ -420,14 +553,12 @@ impl<'a> EdbgAvrTransport<'a> {
             general_signed_on: false,
             avr_signed_on: false,
             programming_enabled: false,
+            chip,
         }
     }
 
-    fn query_target(
-        &mut self,
-        mut info: PkobnUpdiM4809Info,
-    ) -> Result<PkobnUpdiM4809Info, EdbgAvrError> {
-        let partial_family_id = self.enter_m4809_programming_session()?;
+    fn query_target(&mut self, mut info: PkobnUpdiInfo) -> Result<PkobnUpdiInfo, EdbgAvrError> {
+        let partial_family_id = self.auto_detect_and_enter()?;
         info.ice_firmware_version = self.read_ice_firmware_version()?;
         info.ice_serial = self.get_info_string(CMD3_INFO_SERIAL)?;
         info.target_voltage_mv = self.get_u16_param(SCOPE_GENERAL, 1, PARM3_VTARGET)?;
@@ -436,9 +567,9 @@ impl<'a> EdbgAvrTransport<'a> {
 
         info.sib_string = trim_ascii_nul(self.read_memory(MTYPE_SIB, 0, AVR_SIBLEN as u32)?);
 
-        // Note: enter_progmode() is already called by enter_m4809_programming_session() above.
+        // Note: enter_progmode() is already called by auto_detect_and_enter() above.
 
-        let chip_revision = self.read_memory(MTYPE_SRAM, M4809_SYSCFG_BASE + 1, 1)?;
+        let chip_revision = self.read_memory(MTYPE_SRAM, self.chip.syscfg_base + 1, 1)?;
         if chip_revision.len() != 1 {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "chip revision",
@@ -447,61 +578,117 @@ impl<'a> EdbgAvrTransport<'a> {
         }
         info.chip_revision = chip_revision[0];
 
-        let lock = self.read_region(AvrMemoryRegion::Lock, 0, M4809_LOCK_SIZE)?;
-        if lock.len() != M4809_LOCK_SIZE as usize {
+        let lock = self.read_region(AvrMemoryRegion::Lock, 0, self.chip.lock_size)?;
+        if lock.len() != self.chip.lock_size as usize {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "lock read",
-                details: format!("expected 1 byte, got {}", lock.len()),
+                details: format!(
+                    "expected {} byte(s), got {}",
+                    self.chip.lock_size,
+                    lock.len()
+                ),
             });
         }
         info.lock_byte = lock[0];
 
-        info.fuses = self.read_region(AvrMemoryRegion::Fuses, 0, M4809_FUSES_SIZE)?;
-        if info.fuses.len() != M4809_FUSES_SIZE as usize {
+        info.fuses = self.read_region(AvrMemoryRegion::Fuses, 0, self.chip.fuses_size)?;
+        if info.fuses.len() != self.chip.fuses_size as usize {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "fuse read",
                 details: format!(
-                    "expected {M4809_FUSES_SIZE} bytes, got {}",
+                    "expected {} bytes, got {}",
+                    self.chip.fuses_size,
                     info.fuses.len()
                 ),
             });
         }
 
-        info.userrow = self.read_region(AvrMemoryRegion::UserRow, 0, M4809_USERROW_SIZE)?;
-        if info.userrow.len() != M4809_USERROW_SIZE as usize {
+        info.userrow = self.read_region(AvrMemoryRegion::UserRow, 0, self.chip.userrow_size)?;
+        if info.userrow.len() != self.chip.userrow_size as usize {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "user row read",
                 details: format!(
-                    "expected {M4809_USERROW_SIZE} bytes, got {}",
+                    "expected {} bytes, got {}",
+                    self.chip.userrow_size,
                     info.userrow.len()
                 ),
             });
         }
 
-        info.prodsig = self.read_region(AvrMemoryRegion::ProdSig, 0, M4809_PRODSIG_SIZE)?;
-        if info.prodsig.len() < M4809_SIGNATURE.len() {
+        info.prodsig = self.read_region(AvrMemoryRegion::ProdSig, 0, self.chip.prodsig_size)?;
+        if info.prodsig.len() < 3 {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "production signature read",
-                details: format!(
-                    "expected at least {} bytes, got {}",
-                    M4809_SIGNATURE.len(),
-                    info.prodsig.len()
-                ),
+                details: format!("expected at least 3 bytes, got {}", info.prodsig.len()),
             });
         }
-        info.signature
-            .copy_from_slice(&info.prodsig[..M4809_SIGNATURE.len()]);
-        info.detected_part = (info.signature == M4809_SIGNATURE).then_some("ATmega4809");
+        info.signature.copy_from_slice(&info.prodsig[..3]);
+        info.chip = lookup_avr_chip(&info.signature);
 
         Ok(info)
     }
 
-    fn enter_m4809_programming_session(&mut self) -> Result<Option<String>, EdbgAvrError> {
+    /// Try each known chip descriptor in turn, returning the partial family ID on success.
+    fn auto_detect_and_enter(&mut self) -> Result<Option<String>, EdbgAvrError> {
         if self.programming_enabled {
             return Ok(None);
         }
 
-        tracing::debug!("EDBG AVR: entering ATmega4809 programming session");
+        tracing::debug!("EDBG AVR: auto-detecting chip and entering programming session");
+        self.prepare()?;
+        self.general_sign_on()?;
+
+        self.set_param(SCOPE_AVR, 0, PARM3_ARCH, &[PARM3_ARCH_UPDI])?;
+        self.set_param(SCOPE_AVR, 0, PARM3_SESS_PURPOSE, &[PARM3_SESS_PROGRAMMING])?;
+        self.set_param(SCOPE_AVR, 1, PARM3_CONNECTION, &[PARM3_CONN_UPDI])?;
+
+        for chip in KNOWN_AVR_CHIPS {
+            tracing::debug!("EDBG AVR: trying chip descriptor for {}", chip.name);
+            self.set_param(
+                SCOPE_AVR,
+                2,
+                PARM3_DEVICEDESC,
+                &build_updi_device_descriptor(chip),
+            )?;
+
+            match self.command(&[SCOPE_AVR, CMD3_SIGN_ON, 0, 0], "AVR sign-on") {
+                Ok(avr_sign_on_response) => {
+                    tracing::info!("EDBG AVR: sign-on succeeded with {}", chip.name);
+                    self.avr_signed_on = true;
+                    self.chip = KNOWN_AVR_CHIPS
+                        .iter()
+                        .find(|c| c.signature == chip.signature)
+                        .unwrap_or(&ATMEGA4809);
+                    let partial_family_id = partial_family_id_from_response(&avr_sign_on_response);
+                    self.enter_progmode()?;
+                    return Ok(partial_family_id);
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "EDBG AVR: sign-on with {} failed: {e}, trying next",
+                        chip.name
+                    );
+                    // Sign-off so we can try a different descriptor
+                    let _ = self.command(&[SCOPE_AVR, CMD3_SIGN_OFF, 0], "AVR sign-off (retry)");
+                }
+            }
+        }
+
+        Err(EdbgAvrError::UnexpectedResponse {
+            context: "auto-detect",
+            details: "no known chip descriptor was accepted by the target".to_string(),
+        })
+    }
+
+    fn enter_programming_session(&mut self) -> Result<Option<String>, EdbgAvrError> {
+        if self.programming_enabled {
+            return Ok(None);
+        }
+
+        tracing::debug!(
+            "EDBG AVR: entering programming session for {}",
+            self.chip.name
+        );
         self.prepare()?;
         self.general_sign_on()?;
 
@@ -512,7 +699,7 @@ impl<'a> EdbgAvrTransport<'a> {
             SCOPE_AVR,
             2,
             PARM3_DEVICEDESC,
-            &m4809_updi_device_descriptor(),
+            &build_updi_device_descriptor(self.chip),
         )?;
 
         let avr_sign_on_response = self.command(&[SCOPE_AVR, CMD3_SIGN_ON, 0, 0], "AVR sign-on")?;
@@ -530,12 +717,20 @@ impl<'a> EdbgAvrTransport<'a> {
         length: u32,
     ) -> Result<Vec<u8>, EdbgAvrError> {
         let (memory_type, base, region_size) = match region {
-            AvrMemoryRegion::Flash => (MTYPE_FLASH_PAGE, 0, M4809_FLASH_SIZE),
-            AvrMemoryRegion::Eeprom => (MTYPE_EEPROM, M4809_EEPROM_BASE, M4809_EEPROM_SIZE),
-            AvrMemoryRegion::Fuses => (MTYPE_FUSE_BITS, M4809_FUSES_BASE, M4809_FUSES_SIZE),
-            AvrMemoryRegion::Lock => (MTYPE_LOCK_BITS, M4809_LOCK_BASE, M4809_LOCK_SIZE),
-            AvrMemoryRegion::UserRow => (MTYPE_USERSIG, M4809_USERROW_BASE, M4809_USERROW_SIZE),
-            AvrMemoryRegion::ProdSig => (MTYPE_PRODSIG, M4809_SIGNATURE_BASE, M4809_PRODSIG_SIZE),
+            AvrMemoryRegion::Flash => (MTYPE_FLASH_PAGE, 0, self.chip.flash_size),
+            AvrMemoryRegion::Eeprom => (MTYPE_EEPROM, self.chip.eeprom_base, self.chip.eeprom_size),
+            AvrMemoryRegion::Fuses => (MTYPE_FUSE_BITS, self.chip.fuses_base, self.chip.fuses_size),
+            AvrMemoryRegion::Lock => (MTYPE_LOCK_BITS, self.chip.lock_base, self.chip.lock_size),
+            AvrMemoryRegion::UserRow => (
+                MTYPE_USERSIG,
+                self.chip.userrow_base,
+                self.chip.userrow_size,
+            ),
+            AvrMemoryRegion::ProdSig => (
+                MTYPE_PRODSIG,
+                self.chip.signature_base,
+                self.chip.prodsig_size,
+            ),
         };
 
         if offset > region_size || length > region_size.saturating_sub(offset) {
@@ -597,12 +792,15 @@ impl<'a> EdbgAvrTransport<'a> {
             details: format!("write length exceeds 32-bit range: {}", data.len()),
         })?;
 
-        if offset > M4809_FLASH_SIZE || data_len > M4809_FLASH_SIZE.saturating_sub(offset) {
+        let flash_size = self.chip.flash_size;
+        let flash_page_size = self.chip.flash_page_size;
+
+        if offset > flash_size || data_len > flash_size.saturating_sub(offset) {
             return Err(EdbgAvrError::OutOfRange {
                 region: AvrMemoryRegion::Flash,
                 offset,
                 length: data_len,
-                region_size: M4809_FLASH_SIZE,
+                region_size: flash_size,
             });
         }
 
@@ -610,12 +808,12 @@ impl<'a> EdbgAvrTransport<'a> {
             return Ok(());
         }
 
-        let first_page = offset / M4809_FLASH_PAGE_SIZE;
-        let last_page = (offset + data_len - 1) / M4809_FLASH_PAGE_SIZE;
+        let first_page = offset / flash_page_size;
+        let last_page = (offset + data_len - 1) / flash_page_size;
 
         for page in first_page..=last_page {
-            let page_offset = page * M4809_FLASH_PAGE_SIZE;
-            let page_end = page_offset + M4809_FLASH_PAGE_SIZE;
+            let page_offset = page * flash_page_size;
+            let page_end = page_offset + flash_page_size;
 
             let write_start = offset.max(page_offset);
             let write_end = (offset + data_len).min(page_end);
@@ -646,12 +844,13 @@ impl<'a> EdbgAvrTransport<'a> {
             })?;
 
             let mut page_data =
-                self.read_region(AvrMemoryRegion::Flash, page_offset, M4809_FLASH_PAGE_SIZE)?;
-            if page_data.len() != M4809_FLASH_PAGE_SIZE as usize {
+                self.read_region(AvrMemoryRegion::Flash, page_offset, flash_page_size)?;
+            if page_data.len() != flash_page_size as usize {
                 return Err(EdbgAvrError::UnexpectedResponse {
                     context: "write flash",
                     details: format!(
-                        "expected {M4809_FLASH_PAGE_SIZE} bytes of page data, got {}",
+                        "expected {} bytes of page data, got {}",
+                        flash_page_size,
                         page_data.len()
                     ),
                 });
@@ -692,11 +891,13 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn write_flash_page(&mut self, address: u32, page_data: &[u8]) -> Result<(), EdbgAvrError> {
-        if page_data.len() != M4809_FLASH_PAGE_SIZE as usize {
+        let flash_page_size = self.chip.flash_page_size;
+        if page_data.len() != flash_page_size as usize {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "write flash page",
                 details: format!(
-                    "expected page size {M4809_FLASH_PAGE_SIZE}, got {}",
+                    "expected page size {}, got {}",
+                    flash_page_size,
                     page_data.len()
                 ),
             });
@@ -705,7 +906,7 @@ impl<'a> EdbgAvrTransport<'a> {
         let mut command = Vec::with_capacity(13 + page_data.len());
         command.extend_from_slice(&[SCOPE_AVR, CMD3_WRITE_MEMORY, 0, MTYPE_FLASH]);
         command.extend_from_slice(&address.to_le_bytes());
-        command.extend_from_slice(&M4809_FLASH_PAGE_SIZE.to_le_bytes());
+        command.extend_from_slice(&flash_page_size.to_le_bytes());
         command.push(0);
         command.extend_from_slice(page_data);
 
@@ -1235,14 +1436,14 @@ fn partial_family_id_from_response(response: &[u8]) -> Option<String> {
         .map(|family| family.trim_end_matches('\0').to_string())
 }
 
-fn m4809_updi_device_descriptor() -> [u8; 48] {
+fn build_updi_device_descriptor(chip: &AvrChipDescriptor) -> [u8; 48] {
     let mut descriptor = [0u8; 48];
 
-    descriptor[0..2].copy_from_slice(&0x4000u16.to_le_bytes());
-    descriptor[2] = 128;
-    descriptor[3] = 64;
-    descriptor[4..6].copy_from_slice(&0x1000u16.to_le_bytes());
-    descriptor[6..8].copy_from_slice(&0x0f80u16.to_le_bytes());
+    descriptor[0..2].copy_from_slice(&((chip.flash_base & 0xFFFF) as u16).to_le_bytes());
+    descriptor[2] = (chip.flash_page_size & 0xFF) as u8;
+    descriptor[3] = chip.eeprom_page_size;
+    descriptor[4..6].copy_from_slice(&chip.nvm_base.to_le_bytes());
+    descriptor[6..8].copy_from_slice(&chip.ocd_base.to_le_bytes());
     descriptor[8..10].copy_from_slice(&DEFAULT_MINIMUM_CHARACTERISED_DIV1_VOLTAGE_MV.to_le_bytes());
     descriptor[10..12]
         .copy_from_slice(&DEFAULT_MINIMUM_CHARACTERISED_DIV2_VOLTAGE_MV.to_le_bytes());
@@ -1251,35 +1452,37 @@ fn m4809_updi_device_descriptor() -> [u8; 48] {
     descriptor[14..16]
         .copy_from_slice(&DEFAULT_MINIMUM_CHARACTERISED_DIV8_VOLTAGE_MV.to_le_bytes());
     descriptor[16..18].copy_from_slice(&MAX_FREQUENCY_SHARED_UPDI_PIN.to_le_bytes());
-    descriptor[18..22].copy_from_slice(&0x0000_c000u32.to_le_bytes());
-    descriptor[22..24].copy_from_slice(&256u16.to_le_bytes());
-    descriptor[24..26].copy_from_slice(&64u16.to_le_bytes());
-    descriptor[26] = 10;
+    descriptor[18..22].copy_from_slice(&chip.flash_size.to_le_bytes());
+    descriptor[22..24].copy_from_slice(&(chip.eeprom_size as u16).to_le_bytes());
+    descriptor[24..26].copy_from_slice(&(chip.userrow_size as u16).to_le_bytes());
+    descriptor[26] = chip.fuses_size as u8;
     descriptor[27] = FUSES_SYSCFG0_OFFSET;
     descriptor[28] = 0xff;
     descriptor[29] = 0x00;
     descriptor[30] = 0xff;
     descriptor[31] = 0x00;
-    descriptor[32..34].copy_from_slice(&0x1400u16.to_le_bytes());
-    descriptor[34..36].copy_from_slice(&0x1300u16.to_le_bytes());
-    descriptor[36..38].copy_from_slice(&(M4809_SIGNATURE_BASE as u16).to_le_bytes());
-    descriptor[38..40].copy_from_slice(&0x1280u16.to_le_bytes());
-    descriptor[40..42].copy_from_slice(&0x128au16.to_le_bytes());
-    descriptor[42] = M4809_SIGNATURE[1];
-    descriptor[43] = M4809_SIGNATURE[2];
-    descriptor[46] = UPDI_ADDRESS_MODE_16BIT;
-    descriptor[47] = 1;
+    descriptor[32..34].copy_from_slice(&(chip.eeprom_base as u16).to_le_bytes());
+    descriptor[34..36].copy_from_slice(&(chip.userrow_base as u16).to_le_bytes());
+    descriptor[36..38].copy_from_slice(&(chip.signature_base as u16).to_le_bytes());
+    descriptor[38..40].copy_from_slice(&(chip.fuses_base as u16).to_le_bytes());
+    descriptor[40..42].copy_from_slice(&(chip.lock_base as u16).to_le_bytes());
+    descriptor[42] = chip.signature[1];
+    descriptor[43] = chip.signature[2];
+    descriptor[44] = (chip.flash_base >> 16) as u8;
+    descriptor[45] = (chip.flash_page_size >> 8) as u8;
+    descriptor[46] = chip.address_mode;
+    descriptor[47] = chip.hvupdi_variant;
 
     descriptor
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{M4809_SIGNATURE, m4809_updi_device_descriptor};
+    use super::{ATMEGA4809, AVR64EA48, AVR128DB48, build_updi_device_descriptor};
 
     #[test]
     fn m4809_descriptor_matches_expected_layout() {
-        let descriptor = m4809_updi_device_descriptor();
+        let descriptor = build_updi_device_descriptor(&ATMEGA4809);
 
         assert_eq!(descriptor.len(), 48);
         assert_eq!(&descriptor[0..2], &0x4000u16.to_le_bytes());
@@ -1288,9 +1491,63 @@ mod tests {
         assert_eq!(&descriptor[4..6], &0x1000u16.to_le_bytes());
         assert_eq!(&descriptor[6..8], &0x0f80u16.to_le_bytes());
         assert_eq!(&descriptor[36..38], &0x1100u16.to_le_bytes());
-        assert_eq!(descriptor[42], M4809_SIGNATURE[1]);
-        assert_eq!(descriptor[43], M4809_SIGNATURE[2]);
-        assert_eq!(descriptor[46], 0);
-        assert_eq!(descriptor[47], 1);
+        assert_eq!(descriptor[42], ATMEGA4809.signature[1]);
+        assert_eq!(descriptor[43], ATMEGA4809.signature[2]);
+        assert_eq!(descriptor[44], 0); // prog_base_msb: 0x4000 >> 16 = 0
+        assert_eq!(descriptor[45], 0); // flash_page_size_msb: 128 >> 8 = 0
+        assert_eq!(descriptor[46], 0); // 16-bit address mode
+        assert_eq!(descriptor[47], 1); // hvupdi_variant
+    }
+
+    #[test]
+    fn avr128db48_descriptor_has_24bit_addressing() {
+        let descriptor = build_updi_device_descriptor(&AVR128DB48);
+
+        assert_eq!(descriptor.len(), 48);
+        // flash_base low 16 bits: 0x800000 & 0xFFFF = 0x0000
+        assert_eq!(&descriptor[0..2], &0x0000u16.to_le_bytes());
+        // flash_page_size low byte: 512 & 0xFF = 0
+        assert_eq!(descriptor[2], 0);
+        assert_eq!(descriptor[3], 1); // eeprom_page_size
+        // flash_size = 0x20000
+        assert_eq!(&descriptor[18..22], &0x0002_0000u32.to_le_bytes());
+        // eeprom_size = 512
+        assert_eq!(&descriptor[22..24], &512u16.to_le_bytes());
+        // userrow_size = 32
+        assert_eq!(&descriptor[24..26], &32u16.to_le_bytes());
+        // fuses_size = 16
+        assert_eq!(descriptor[26], 16);
+        assert_eq!(descriptor[42], AVR128DB48.signature[1]);
+        assert_eq!(descriptor[43], AVR128DB48.signature[2]);
+        // prog_base_msb: 0x800000 >> 16 = 0x80
+        assert_eq!(descriptor[44], 0x80);
+        // flash_page_size_msb: 512 >> 8 = 2
+        assert_eq!(descriptor[45], 2);
+        // 24-bit address mode
+        assert_eq!(descriptor[46], 1);
+        assert_eq!(descriptor[47], 1); // hvupdi_variant
+    }
+
+    #[test]
+    fn avr64ea48_descriptor_key_fields() {
+        let descriptor = build_updi_device_descriptor(&AVR64EA48);
+
+        assert_eq!(descriptor.len(), 48);
+        // flash_base low 16 bits: 0x800000 & 0xFFFF = 0x0000
+        assert_eq!(&descriptor[0..2], &0x0000u16.to_le_bytes());
+        // flash_page_size low byte: 128 & 0xFF = 128
+        assert_eq!(descriptor[2], 128);
+        assert_eq!(descriptor[3], 8); // eeprom_page_size
+        // flash_size = 0x10000
+        assert_eq!(&descriptor[18..22], &0x0001_0000u32.to_le_bytes());
+        assert_eq!(descriptor[42], AVR64EA48.signature[1]);
+        assert_eq!(descriptor[43], AVR64EA48.signature[2]);
+        // prog_base_msb: 0x800000 >> 16 = 0x80
+        assert_eq!(descriptor[44], 0x80);
+        // flash_page_size_msb: 128 >> 8 = 0
+        assert_eq!(descriptor[45], 0);
+        // 24-bit address mode
+        assert_eq!(descriptor[46], 1);
+        assert_eq!(descriptor[47], 2); // hvupdi_variant
     }
 }

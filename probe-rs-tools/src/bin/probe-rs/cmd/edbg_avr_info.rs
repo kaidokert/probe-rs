@@ -3,7 +3,7 @@ use std::io::Write;
 use anyhow::{Context, Result, bail};
 use probe_rs::probe::{
     DebugProbeInfo, DebugProbeSelector,
-    cmsisdap::{PkobnUpdiM4809Info, query_pkobn_updi_m4809},
+    cmsisdap::{PkobnUpdiInfo, query_pkobn_updi},
     list::Lister,
 };
 
@@ -25,7 +25,7 @@ impl Cmd {
     pub fn run(self, lister: &Lister) -> Result<()> {
         let probe = select_probe_for_edbg(lister, self.probe.as_ref(), self.non_interactive)?;
         let selector = DebugProbeSelector::from(&probe);
-        let info = query_pkobn_updi_m4809(&selector)?;
+        let info = query_pkobn_updi(&selector)?;
 
         println!("Probe: {}", probe);
         print_info(&info);
@@ -34,7 +34,7 @@ impl Cmd {
     }
 }
 
-pub(crate) fn format_info_lines(info: &PkobnUpdiM4809Info) -> Vec<String> {
+pub(crate) fn format_info_lines(info: &PkobnUpdiInfo) -> Vec<String> {
     let mut lines = Vec::new();
 
     if let Some(vendor) = &info.cmsis_dap_vendor {
@@ -86,14 +86,14 @@ pub(crate) fn format_info_lines(info: &PkobnUpdiM4809Info) -> Vec<String> {
     lines.push(format!("Fuses: {}", format_hex_bytes(&info.fuses)));
     lines.extend(hex_dump_lines("USERROW", &info.userrow));
     lines.extend(hex_dump_lines("PRODSIG", &info.prodsig));
-    if let Some(part) = info.detected_part {
-        lines.push(format!("Detected part: {part}"));
+    if let Some(chip) = info.chip {
+        lines.push(format!("Detected part: {}", chip.name));
     }
 
     lines
 }
 
-pub(crate) fn print_info(info: &PkobnUpdiM4809Info) {
+pub(crate) fn print_info(info: &PkobnUpdiInfo) {
     for line in format_info_lines(info) {
         println!("{line}");
     }
