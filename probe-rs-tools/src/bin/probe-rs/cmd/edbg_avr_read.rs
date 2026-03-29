@@ -1,59 +1,50 @@
-use anyhow::Context;
-use ihex::Record;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::CoreOptions;
-use crate::rpc::client::{CoreInterface, RpcClient};
-use crate::util::cli;
-use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
-use probe_rs::probe::WireProtocol;
+use anyhow::Context;
+use ihex::Record;
+use probe_rs::probe::{
+    DebugProbeSelector,
+    cmsisdap::{AvrMemoryRegion, read_pkobn_updi_region},
+    list::Lister,
+};
 
-/// Read from target memory address
-///
-/// e.g. probe-rs read b32 0x400E1490 2
-///      Reads 2 32-bit words from address 0x400E1490
-///
-/// e.g. probe-rs read --protocol updi --region eeprom b8 0x00 16
-///      Reads 16 bytes from EEPROM offset 0x00 on the narrow AVR UPDI path
-///
-/// Default output is a space separated list of hex values padded to the read word width.
-/// e.g. 2 words
-///     00 00 (8-bit)
-///     00000000 00000000 (32-bit)
-///     0000000000000000 0000000000000000 (64-bit)
-///
-/// If the --output argument is provided, readback data is instead saved to a file as hex/bin.
-/// In this case, the read word width has no effect except determining the total number of bytes
-#[derive(clap::Parser)]
-#[clap(verbatim_doc_comment)]
-pub struct Cmd {
-    #[clap(flatten)]
-    shared: CoreOptions,
+use crate::util::common_options::{ReadWriteBitWidth, ReadWriteOptions};
 
-    #[clap(flatten)]
-    probe_options: ProbeOptions,
+use super::edbg_avr_info::select_probe_for_edbg;
 
-    #[clap(flatten)]
-    read_write_options: ReadWriteOptions,
-
-    /// Number of words to read from the target
-    words: usize,
-
-    /// File to output binary data to
-    #[arg(long, short)]
-    output: Option<PathBuf>,
-
-    /// Format of the outputted binary data
-    #[clap(value_enum, default_value_t=OutputFormat::HexTable)]
-    #[arg(long, short)]
-    format: OutputFormat,
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum Region {
+    /// Flash memory, addressed relative to the flash start.
+    Flash,
+    /// EEPROM memory, addressed relative to the EEPROM start.
+    Eeprom,
+    /// Fuse bytes, addressed relative to the fuse region start.
+    Fuses,
+    /// Lock byte, addressed relative to the lock region start.
+    Lock,
+    /// USERROW bytes, addressed relative to the user row start.
+    Userrow,
+    /// Production signature bytes, addressed relative to the production signature start.
+    Prodsig,
 }
 
-// ---------- OutputFormat (copied from the former read_output.rs) ----------
+impl From<Region> for AvrMemoryRegion {
+    fn from(region: Region) -> Self {
+        match region {
+            Region::Flash => AvrMemoryRegion::Flash,
+            Region::Eeprom => AvrMemoryRegion::Eeprom,
+            Region::Fuses => AvrMemoryRegion::Fuses,
+            Region::Lock => AvrMemoryRegion::Lock,
+            Region::Userrow => AvrMemoryRegion::UserRow,
+            Region::Prodsig => AvrMemoryRegion::ProdSig,
+        }
+    }
+}
 
+// TODO: refactor to share OutputFormat with read.rs
 #[derive(clap::ValueEnum, Clone, Copy)]
-pub(crate) enum OutputFormat {
+enum OutputFormat {
     /// Intel Hex Format
     Ihex,
     /// Simple list of hexadecimal numbers
@@ -65,7 +56,7 @@ pub(crate) enum OutputFormat {
 }
 
 impl OutputFormat {
-    pub(crate) fn write(
+    fn write_to(
         self,
         dst: impl Write,
         address: u64,
@@ -80,29 +71,27 @@ impl OutputFormat {
         }
     }
 
-    pub(crate) fn save_to_file(
+    fn save_to_file(
         self,
         address: u64,
         width: ReadWriteBitWidth,
         data: &[u8],
         path: &Path,
     ) -> anyhow::Result<()> {
-        // Write to an in-memory buffer first so we don't truncate the output
-        // file if format validation or serialization fails.
         let mut buf = Vec::new();
-        self.write(&mut buf, address, width, data)?;
+        self.write_to(&mut buf, address, width, data)?;
         std::fs::write(path, &buf)?;
         Ok(())
     }
 
-    pub(crate) fn print_to_console(
+    fn print_to_console(
         self,
         address: u64,
         width: ReadWriteBitWidth,
         data: &[u8],
     ) -> anyhow::Result<()> {
         let mut stdout = std::io::stdout();
-        self.write(&mut stdout, address, width, data)
+        self.write_to(&mut stdout, address, width, data)
     }
 
     fn write_simple_hex(
@@ -111,7 +100,6 @@ impl OutputFormat {
         data: &[u8],
     ) -> anyhow::Result<()> {
         let bytes = width.byte_width();
-
         let mut first = true;
         for window in data.chunks(bytes) {
             if first {
@@ -119,12 +107,10 @@ impl OutputFormat {
             } else {
                 write!(dst, " ")?;
             }
-
             for byte in window.iter().rev() {
                 write!(dst, "{byte:02x}")?;
             }
         }
-
         writeln!(dst)?;
         Ok(())
     }
@@ -145,7 +131,6 @@ impl OutputFormat {
             Self::write_simple_hex(&mut dst, width, window)?;
             address += bytes_in_line as u64;
         }
-
         Ok(())
     }
 
@@ -165,13 +150,11 @@ impl OutputFormat {
                 .try_into()
                 .context("Hex format only supports addressing up to 32 bits")?;
 
-            // Emit an extended linear address record when crossing a 64 KiB boundary.
             if last_address_msbs != Some(address_msbs) {
                 records.push(Record::ExtendedLinearAddress(address_msbs));
                 last_address_msbs = Some(address_msbs);
             }
 
-            // Limit the chunk so it doesn't cross a 64 KiB segment boundary.
             let bytes_until_boundary = 0x10000u64.saturating_sub(running_address & 0xFFFF);
             let chunk_len = remaining
                 .len()
@@ -194,20 +177,64 @@ impl OutputFormat {
     }
 }
 
-// ---------- Command implementation ----------
+/// Experimental AVR UPDI region read.
+///
+/// The address argument is relative to the selected AVR region.
+///
+/// e.g. `probe-rs edbg-avr-read --region eeprom b8 0x00 16`
+///      Reads 16 bytes from EEPROM starting at EEPROM offset 0x00.
+///
+/// e.g. `probe-rs edbg-avr-read --region flash b8 0x00 16`
+///      Reads 16 bytes from flash starting at flash offset 0x00.
+#[derive(clap::Parser)]
+#[clap(verbatim_doc_comment)]
+pub struct Cmd {
+    /// Disable interactive probe selection
+    #[arg(
+        long,
+        env = "PROBE_RS_NON_INTERACTIVE",
+        help_heading = "PROBE CONFIGURATION"
+    )]
+    non_interactive: bool,
+    /// Use this flag to select a specific probe in the list.
+    #[arg(long, env = "PROBE_RS_PROBE", help_heading = "PROBE CONFIGURATION")]
+    probe: Option<DebugProbeSelector>,
+
+    /// AVR memory region to read from
+    #[arg(long, value_enum)]
+    region: Region,
+
+    #[clap(flatten)]
+    read_write_options: ReadWriteOptions,
+
+    /// Number of words to read from the selected region
+    words: usize,
+
+    /// File to output binary data to
+    #[arg(long, short)]
+    output: Option<PathBuf>,
+
+    /// Format of the outputted binary data
+    #[clap(value_enum, default_value_t=OutputFormat::HexTable)]
+    #[arg(long, short)]
+    format: OutputFormat,
+}
 
 impl Cmd {
-    pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        let session = cli::attach_probe(&client, self.probe_options.clone(), false).await?;
-        let core = session.core(self.shared.core);
-        let address = self.read_write_options.address;
+    pub fn run(self, lister: &Lister) -> anyhow::Result<()> {
+        let probe = select_probe_for_edbg(lister, self.probe.as_ref(), self.non_interactive)?;
+        let selector = DebugProbeSelector::from(&probe);
+        let region: AvrMemoryRegion = self.region.into();
+        let byte_len = self
+            .words
+            .checked_mul(self.read_write_options.width.byte_width())
+            .context("requested read length overflowed")?;
+        let byte_len =
+            u32::try_from(byte_len).context("requested read length exceeds 32-bit range")?;
+        let offset = u32::try_from(self.read_write_options.address)
+            .context("region-relative AVR address exceeds 32-bit range")?;
 
-        let data =
-            Self::read_memory(core, address, self.read_write_options.width, self.words).await?;
-
-        if self.probe_options.protocol != Some(WireProtocol::Updi) {
-            session.resume_all_cores().await?;
-        }
+        let data = read_pkobn_updi_region(&selector, region, offset, byte_len)?;
 
         match self.output {
             Some(path) => self.format.save_to_file(
@@ -221,47 +248,8 @@ impl Cmd {
                 self.read_write_options.width,
                 &data,
             )?,
-        };
+        }
 
         Ok(())
-    }
-
-    async fn read_memory(
-        core: CoreInterface,
-        address: u64,
-        width: ReadWriteBitWidth,
-        nwords: usize,
-    ) -> anyhow::Result<Vec<u8>> {
-        let bytes = match width {
-            ReadWriteBitWidth::B8 => {
-                let values = core.read_memory_8(address, nwords).await?;
-                values
-                    .into_iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect::<Vec<_>>()
-            }
-            ReadWriteBitWidth::B16 => {
-                let values = core.read_memory_16(address, nwords).await?;
-                values
-                    .into_iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect::<Vec<_>>()
-            }
-            ReadWriteBitWidth::B32 => {
-                let values = core.read_memory_32(address, nwords).await?;
-                values
-                    .into_iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect::<Vec<_>>()
-            }
-            ReadWriteBitWidth::B64 => {
-                let values = core.read_memory_64(address, nwords).await?;
-                values
-                    .into_iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect::<Vec<_>>()
-            }
-        };
-        Ok(bytes)
     }
 }

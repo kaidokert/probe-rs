@@ -3,13 +3,15 @@ use crate::rpc::client::RpcClient;
 use crate::CoreOptions;
 use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
 use crate::util::{cli, parse_u64};
-
 /// Write to target memory address
 ///
 /// e.g. probe-rs write b32 0x400E1490 0xDEADBEEF 0xCAFEF00D
 ///      Writes 0xDEADBEEF to address 0x400E1490 and 0xCAFEF00D to address 0x400E1494
 ///
-/// NOTE: Only supports RAM addresses
+/// e.g. probe-rs write --protocol updi b8 0x12 0x40 0xE1
+///      Writes two bytes to flash offset 0x12 on the narrow AVR UPDI path
+///
+/// NOTE: The generic path supports RAM addresses. The local UPDI path currently only supports flash.
 #[derive(clap::Parser)]
 #[clap(verbatim_doc_comment)]
 pub struct Cmd {
@@ -54,31 +56,25 @@ impl Cmd {
         let session = cli::attach_probe(&client, self.probe_options, false).await?;
         let core = session.core(self.shared.core);
 
+        // For AVR UPDI, the address is flash-relative (base 0) by default.
+        // TODO: add --region support for write similar to read.rs
+        let address = self.read_write_options.address;
+
         match self.read_write_options.width {
             ReadWriteBitWidth::B8 => {
-                core.write_memory_8(
-                    self.read_write_options.address,
-                    self.values.iter().map(|v| *v as u8).collect(),
-                )
-                .await?;
+                core.write_memory_8(address, self.values.iter().map(|v| *v as u8).collect())
+                    .await?;
             }
             ReadWriteBitWidth::B16 => {
-                core.write_memory_16(
-                    self.read_write_options.address,
-                    self.values.iter().map(|v| *v as u16).collect(),
-                )
-                .await?;
+                core.write_memory_16(address, self.values.iter().map(|v| *v as u16).collect())
+                    .await?;
             }
             ReadWriteBitWidth::B32 => {
-                core.write_memory_32(
-                    self.read_write_options.address,
-                    self.values.iter().map(|v| *v as u32).collect(),
-                )
-                .await?;
+                core.write_memory_32(address, self.values.iter().map(|v| *v as u32).collect())
+                    .await?;
             }
             ReadWriteBitWidth::B64 => {
-                core.write_memory_64(self.read_write_options.address, self.values)
-                    .await?;
+                core.write_memory_64(address, self.values).await?;
             }
         }
 
