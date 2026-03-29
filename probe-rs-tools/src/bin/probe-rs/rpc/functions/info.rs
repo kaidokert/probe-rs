@@ -329,15 +329,13 @@ async fn try_show_info(
     }
 
     if probe.protocol() == Some(ProbeRsWireProtocol::Updi) {
+        let probe_name = probe.get_name();
         let cmsis: &mut CmsisDap = Probe::try_into(&mut probe)
             .ok_or_else(|| anyhow::anyhow!("UPDI info requires a CMSIS-DAP probe"))?;
         let info = query_attached_pkobn_updi(cmsis)?;
         ctx.publish::<TargetInfoDataTopic>(
             VarSeq::Seq2(0),
-            &InfoEvent::Message(format!(
-                "Probe: {}",
-                info.cmsis_dap_product.as_deref().unwrap_or("unknown")
-            )),
+            &InfoEvent::Message(format!("Probe: {probe_name}")),
         )
         .await?;
         for line in edbg_avr_info::format_info_lines(&info) {
