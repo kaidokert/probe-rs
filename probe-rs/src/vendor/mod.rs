@@ -290,16 +290,13 @@ pub(crate) fn auto_determine_target(
     let mut found_target = None;
 
     if probe.protocol() == Some(WireProtocol::Updi) {
+        use crate::config::{MemoryRegion, NvmRegion};
         use crate::probe::cmsisdap::{CmsisDap, identify_attached_pkobn_updi};
 
-        let chip_name = {
+        let chip = {
             let cmsis: Option<&mut CmsisDap> = Probe::try_into(&mut probe);
             match cmsis {
-                Some(cmsis) => {
-                    let chip = identify_attached_pkobn_updi(cmsis)?;
-                    tracing::info!("UPDI auto-detection identified: {}", chip.name);
-                    chip.name.to_string()
-                }
+                Some(cmsis) => identify_attached_pkobn_updi(cmsis)?,
                 None => {
                     return Err(Error::Other(
                         "UPDI auto-detection requires a CMSIS-DAP probe".to_string(),
@@ -308,11 +305,36 @@ pub(crate) fn auto_determine_target(
             }
         };
 
+        tracing::info!("UPDI auto-detection identified: {}", chip.name);
+
+        // Populate the Target memory map with basic NVM regions from the chip
+        // descriptor. The actual UPDI memory operations go through the chip
+        // descriptor directly (not Target.memory_map), but this gives downstream
+        // code visibility into the available memory.
+        let memory_map = vec![
+            MemoryRegion::Nvm(NvmRegion {
+                name: Some("Flash".to_string()),
+                range: u64::from(chip.flash_base)
+                    ..u64::from(chip.flash_base) + u64::from(chip.flash_size),
+                cores: vec![],
+                is_alias: false,
+                access: None,
+            }),
+            MemoryRegion::Nvm(NvmRegion {
+                name: Some("EEPROM".to_string()),
+                range: u64::from(chip.eeprom_base)
+                    ..u64::from(chip.eeprom_base) + u64::from(chip.eeprom_size),
+                cores: vec![],
+                is_alias: false,
+                access: None,
+            }),
+        ];
+
         let target = Target {
-            name: chip_name,
+            name: chip.name.to_string(),
             cores: vec![],
             flash_algorithms: vec![],
-            memory_map: vec![],
+            memory_map,
             source: TargetDescriptionSource::Generic,
             debug_sequence: DebugSequence::Avr(()),
             rtt_scan_regions: ScanRegion::Ram,

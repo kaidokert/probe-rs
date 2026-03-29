@@ -251,8 +251,8 @@ pub struct PkobnUpdiInfo {
     pub chip_revision: u8,
     /// Raw three-byte device signature.
     pub signature: [u8; 3],
-    /// Lock byte.
-    pub lock_byte: u8,
+    /// Raw lock bytes (may be 1 or more depending on the chip).
+    pub lock_bytes: Vec<u8>,
     /// Raw fuse bytes.
     pub fuses: Vec<u8>,
     /// Raw USERROW bytes.
@@ -348,7 +348,7 @@ pub fn query_pkobn_updi(selector: &DebugProbeSelector) -> Result<PkobnUpdiInfo, 
         sib_string: String::new(),
         chip_revision: 0,
         signature: [0; 3],
-        lock_byte: 0,
+        lock_bytes: vec![],
         fuses: vec![],
         userrow: vec![],
         prodsig: vec![],
@@ -375,6 +375,10 @@ pub fn read_pkobn_updi_region(
 }
 
 /// Read bytes from an AVR UPDI memory region using an already-open CMSIS-DAP probe.
+///
+/// The chip descriptor was already verified during session creation
+/// (`auto_determine_target` -> `identify_attached_pkobn_updi` -> `auto_detect_and_enter`),
+/// so we skip signature verification here and go straight to `enter_programming_session`.
 pub fn read_attached_pkobn_updi_region(
     probe: &mut super::super::CmsisDap,
     chip: &'static AvrChipDescriptor,
@@ -393,6 +397,9 @@ pub fn read_attached_pkobn_updi_region(
 
 /// Erase the AVR target through the EDBG AVR chip erase command using an
 /// already-open CMSIS-DAP probe.
+///
+/// The chip descriptor was already verified during session creation
+/// (`auto_determine_target` -> `identify_attached_pkobn_updi` -> `auto_detect_and_enter`).
 pub fn erase_attached_pkobn_updi(
     probe: &mut super::super::CmsisDap,
     chip: &'static AvrChipDescriptor,
@@ -408,6 +415,9 @@ pub fn erase_attached_pkobn_updi(
 
 /// Write bytes into AVR flash memory using page programming through an
 /// already-open CMSIS-DAP probe.
+///
+/// The chip descriptor was already verified during session creation
+/// (`auto_determine_target` -> `identify_attached_pkobn_updi` -> `auto_detect_and_enter`).
 pub fn write_attached_pkobn_updi_flash(
     probe: &mut super::super::CmsisDap,
     chip: &'static AvrChipDescriptor,
@@ -419,6 +429,46 @@ pub fn write_attached_pkobn_updi_flash(
         let _ = transport.enter_programming_session()?;
         transport.write_flash(offset, data)
     })();
+
+    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
+}
+
+/// Query the AVR target through an already-open CMSIS-DAP probe.
+///
+/// CMSIS-DAP info strings (vendor, product, serial, firmware version) are not
+/// available through this path because they were already consumed during probe
+/// initialisation; those fields will be `None` in the returned struct.
+pub fn query_attached_pkobn_updi(
+    probe: &mut super::super::CmsisDap,
+    selector: &DebugProbeSelector,
+) -> Result<PkobnUpdiInfo, DebugProbeError> {
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &ATMEGA4809);
+    let result = transport.query_target(PkobnUpdiInfo {
+        probe_selector: selector.clone(),
+        cmsis_dap_vendor: None,
+        cmsis_dap_product: None,
+        cmsis_dap_serial: None,
+        cmsis_dap_firmware_version: None,
+        cmsis_dap_packet_size: 0,
+        ice_serial: None,
+        ice_firmware_version: IceFirmwareVersion {
+            hardware: 0,
+            major: 0,
+            minor: 0,
+            release: 0,
+        },
+        target_voltage_mv: 0,
+        updi_clock_khz: 0,
+        partial_family_id: None,
+        sib_string: String::new(),
+        chip_revision: 0,
+        signature: [0; 3],
+        lock_bytes: vec![],
+        fuses: vec![],
+        userrow: vec![],
+        prodsig: vec![],
+        chip: None,
+    });
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
@@ -606,7 +656,7 @@ impl<'a> EdbgAvrTransport<'a> {
                 ),
             });
         }
-        info.lock_byte = lock[0];
+        info.lock_bytes = lock;
 
         info.fuses = self.read_region(AvrMemoryRegion::Fuses, 0, self.chip.fuses_size)?;
         if info.fuses.len() != self.chip.fuses_size as usize {

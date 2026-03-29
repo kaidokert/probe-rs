@@ -78,7 +78,7 @@ impl Cmd {
                 "  flash[0x{address:04x}..0x{end:04x}) <- {} bytes",
                 block.data.len(),
                 address = block.address,
-                end = block.address + u32::try_from(block.data.len()).unwrap_or(u32::MAX),
+                end = block.address.saturating_add(block.data.len() as u32),
             );
             core.write_memory_8(
                 u64::from(block.address),
@@ -255,6 +255,10 @@ fn load_updi_elf_blocks(path: &PathBuf, format: &FormatOptions) -> anyhow::Resul
             continue;
         }
 
+        // avr-gcc produces 0-based physical addresses (p_paddr) for flash segments.
+        // The EDBG transport's write_flash/read_region also use 0-based offsets
+        // (the flash_base address is handled internally by the MTYPE_FLASH_PAGE
+        // memory type), so no rebasing is needed here.
         let address: u32 = segment.p_paddr(endian);
 
         blocks.push(FlashBlock {

@@ -82,7 +82,10 @@ pub(crate) fn format_info_lines(info: &PkobnUpdiInfo) -> Vec<String> {
         "Signature: {:02x} {:02x} {:02x}",
         info.signature[0], info.signature[1], info.signature[2]
     ));
-    lines.push(format!("Lock byte: {:02x}", info.lock_byte));
+    lines.push(format!(
+        "Lock bytes: {}",
+        format_hex_bytes(&info.lock_bytes)
+    ));
     lines.push(format!("Fuses: {}", format_hex_bytes(&info.fuses)));
     lines.extend(hex_dump_lines("USERROW", &info.userrow));
     lines.extend(hex_dump_lines("PRODSIG", &info.prodsig));
@@ -124,6 +127,13 @@ pub(crate) fn select_probe_for_edbg(
     non_interactive: bool,
 ) -> Result<DebugProbeInfo> {
     if let Some(selector) = selector {
+        if selector.vendor_id != 0x03eb || selector.product_id != 0x2175 {
+            bail!(
+                "Probe selector {:04x}:{:04x} does not match expected EDBG VID:PID 03eb:2175",
+                selector.vendor_id,
+                selector.product_id
+            );
+        }
         let list = lister.list(Some(selector));
         return match list.as_slice() {
             [] => bail!("Probe not found"),

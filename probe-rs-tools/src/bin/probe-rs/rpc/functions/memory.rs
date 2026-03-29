@@ -149,18 +149,21 @@ impl From<AvrMemoryRegion> for ProbeRsAvrMemoryRegion {
     }
 }
 
-fn read_word<W: Word + 'static>(bytes: &[u8]) -> anyhow::Result<W> {
-    let any: Box<dyn std::any::Any> = match bytes.len() {
-        1 => Box::new(bytes[0]),
-        2 => Box::new(u16::from_le_bytes([bytes[0], bytes[1]])),
-        4 => Box::new(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
-        8 => Box::new(u64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ])),
-        _ => anyhow::bail!("unsupported word width {}", bytes.len()),
-    };
-
-    any.downcast::<W>()
-        .map(|boxed| *boxed)
-        .map_err(|_| anyhow::anyhow!("failed to decode read word"))
+fn read_word<W: Word>(bytes: &[u8]) -> anyhow::Result<W> {
+    let size = std::mem::size_of::<W>();
+    anyhow::ensure!(
+        bytes.len() >= size,
+        "expected at least {size} bytes for word read, got {}",
+        bytes.len()
+    );
+    let mut word = W::default();
+    // Safety: W is one of u8, u16, u32, u64 (the only implementors of Word).
+    // All are POD types with size == `size`, and we have verified that `bytes`
+    // contains at least `size` bytes. Copying in LE byte order is correct
+    // because from_le_bytes/to_le_bytes is the canonical encoding throughout
+    // this module.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), &mut word as *mut W as *mut u8, size);
+    }
+    Ok(word)
 }

@@ -4,8 +4,9 @@ mod tools;
 pub use self::commands::edbg_avr::{
     ATMEGA4809, AvrChipDescriptor, AvrMemoryRegion, IceFirmwareVersion, KNOWN_AVR_CHIPS,
     PkobnUpdiInfo, erase_attached_pkobn_updi, erase_pkobn_updi, identify_attached_pkobn_updi,
-    query_pkobn_updi, read_attached_pkobn_updi_region, read_pkobn_updi_region, reset_pkobn_updi,
-    write_attached_pkobn_updi_flash, write_pkobn_updi_flash,
+    query_attached_pkobn_updi, query_pkobn_updi, read_attached_pkobn_updi_region,
+    read_pkobn_updi_region, reset_pkobn_updi, write_attached_pkobn_updi_flash,
+    write_pkobn_updi_flash,
 };
 
 use crate::{
@@ -776,6 +777,11 @@ impl CmsisDap {
             return Ok(());
         }
 
+        // NOTE: UPDI piggybacks on the CMSIS-DAP SWD transport layer for vendor command
+        // access to the EDBG/JTAGICE3 protocol. The actual UPDI operations are handled
+        // entirely through vendor-specific commands in edbg_avr.rs, not through the
+        // standard DAP/SWD/JTAG interfaces. Generic ARM/RISC-V debug interfaces are
+        // not available when using UPDI protocol.
         if self.protocol == Some(WireProtocol::Updi) {
             match commands::send_command(&mut self.device, &ConnectRequest::Swd)? {
                 ConnectResponse::SuccessfulInitForSWD => {}
