@@ -697,21 +697,37 @@ impl<'a> EdbgAvrTransport<'a> {
                             self.chip.signature[1],
                             self.chip.signature[2],
                         );
-                        if let Some(actual_chip) = lookup_avr_chip(&signature) {
-                            tracing::info!(
-                                "EDBG AVR: signature matches {}, updating chip descriptor",
-                                actual_chip.name
-                            );
-                            self.chip = actual_chip;
-                        } else {
-                            return Err(EdbgAvrError::UnexpectedResponse {
+                        let actual_chip = lookup_avr_chip(&signature).ok_or_else(|| {
+                            EdbgAvrError::UnexpectedResponse {
                                 context: "signature verification",
                                 details: format!(
                                     "unknown AVR signature: {:02x} {:02x} {:02x}",
                                     signature[0], signature[1], signature[2]
                                 ),
-                            });
-                        }
+                            }
+                        })?;
+
+                        // Re-send the correct descriptor so firmware and driver
+                        // agree on flash geometry, then re-enter programming mode.
+                        tracing::info!(
+                            "EDBG AVR: re-initializing with correct descriptor for {}",
+                            actual_chip.name
+                        );
+                        self.leave_progmode()?;
+                        self.avr_sign_off()?;
+                        self.chip = actual_chip;
+                        self.set_param(
+                            SCOPE_AVR,
+                            2,
+                            PARM3_DEVICEDESC,
+                            &build_updi_device_descriptor(self.chip),
+                        )?;
+                        let re_sign_on =
+                            self.command(&[SCOPE_AVR, CMD3_SIGN_ON, 0, 0], "AVR re-sign-on")?;
+                        self.avr_signed_on = true;
+                        let partial_family_id = partial_family_id_from_response(&re_sign_on);
+                        self.enter_progmode()?;
+                        return Ok(partial_family_id);
                     }
 
                     return Ok(partial_family_id);
