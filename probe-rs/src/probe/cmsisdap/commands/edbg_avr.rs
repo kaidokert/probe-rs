@@ -31,13 +31,25 @@ const CMD3_SIGN_OFF: u8 = 0x11;
 const CMD3_ENTER_PROGMODE: u8 = 0x15;
 const CMD3_LEAVE_PROGMODE: u8 = 0x16;
 const CMD3_ERASE_MEMORY: u8 = 0x20;
+const CMD3_ATTACH: u8 = 0x13;
+const CMD3_DETACH: u8 = 0x14;
 const CMD3_READ_MEMORY: u8 = 0x21;
 const CMD3_WRITE_MEMORY: u8 = 0x23;
+const CMD3_RESET: u8 = 0x30;
+const CMD3_STOP: u8 = 0x31;
+const CMD3_RUN: u8 = 0x32;
+const CMD3_STEP: u8 = 0x34;
+const CMD3_READ_PC: u8 = 0x35;
+#[allow(dead_code)]
+const CMD3_WRITE_PC: u8 = 0x36;
+const CMD3_HW_BREAK_SET: u8 = 0x40;
+const CMD3_HW_BREAK_CLEAR: u8 = 0x41;
 
 const CMD3_INFO_SERIAL: u8 = 0x81;
 
 const RSP3_OK: u8 = 0x80;
 const RSP3_INFO: u8 = 0x81;
+const RSP3_PC: u8 = 0x83;
 const RSP3_DATA: u8 = 0x84;
 const RSP3_STATUS_MASK: u8 = 0xe0;
 
@@ -45,6 +57,9 @@ const XMEGA_ERASE_CHIP: u8 = 0x00;
 const XMEGA_ERASE_APP_PAGE: u8 = 0x04;
 
 const MTYPE_EEPROM: u8 = 0x22;
+const MTYPE_REGFILE: u8 = 0xB8;
+const MTYPE_SPM: u8 = 0xA0;
+const MTYPE_OCD: u8 = 0xD1;
 const MTYPE_FLASH_PAGE: u8 = 0xb0;
 const MTYPE_FUSE_BITS: u8 = 0xb2;
 const MTYPE_LOCK_BITS: u8 = 0xb3;
@@ -61,12 +76,24 @@ const PARM3_ARCH: u8 = 0x00;
 const PARM3_ARCH_UPDI: u8 = 5;
 const PARM3_SESS_PURPOSE: u8 = 0x01;
 const PARM3_SESS_PROGRAMMING: u8 = 1;
+const PARM3_SESS_DEBUGGING: u8 = 2;
 const PARM3_CONNECTION: u8 = 0x00;
 const PARM3_CONN_UPDI: u8 = 8;
 const PARM3_CLK_XMEGA_PDI: u8 = 0x31;
 
 const EDBG_VENDOR_AVR_CMD: u8 = 0x80;
 const EDBG_VENDOR_AVR_RSP: u8 = 0x81;
+
+// OCD register offsets (relative to chip ocd_base in the OCD memtype)
+const OCD_SP_OFFSET: u32 = 0x18;
+const OCD_SREG_OFFSET: u32 = 0x1C;
+
+// Test context for status query
+const SCOPE_TEST: u8 = 0x80;
+const PARM_TARGET_RUNNING: u8 = 0x00;
+
+// Breakpoint type
+const BP_TYPE_PROGRAM: u8 = 0x01;
 
 const DEFAULT_MINIMUM_CHARACTERISED_DIV1_VOLTAGE_MV: u16 = 4500;
 const DEFAULT_MINIMUM_CHARACTERISED_DIV2_VOLTAGE_MV: u16 = 2700;
@@ -122,6 +149,21 @@ pub struct AvrChipDescriptor {
     pub address_mode: u8,
     /// HVUPDI variant identifier sent in the device descriptor.
     pub hvupdi_variant: u8,
+}
+
+/// Persistent debug session state tracked across CoreInterface calls.
+#[derive(Debug, Default)]
+pub struct AvrDebugState {
+    /// Current command sequence number for the EDBG transport.
+    pub command_sequence: u16,
+    /// Whether a general sign-on has been performed.
+    pub general_signed_on: bool,
+    /// Whether an AVR sign-on has been performed.
+    pub avr_signed_on: bool,
+    /// Whether we are currently in OCD debug mode.
+    pub in_debug_mode: bool,
+    /// Cached hardware breakpoint state (one slot for ATmega4809).
+    pub hw_breakpoint: Option<u64>,
 }
 
 /// Chip descriptor for the ATmega4809 (megaAVR 0-series, 48 KB flash).
@@ -629,6 +671,29 @@ impl<'a> EdbgAvrTransport<'a> {
             programming_enabled: false,
             chip,
         }
+    }
+
+    fn from_attached_device_with_debug_state(
+        device: &'a mut CmsisDapDevice,
+        chip: &'static AvrChipDescriptor,
+        debug_state: &AvrDebugState,
+    ) -> Self {
+        Self {
+            device: TransportDevice::Borrowed(device),
+            command_sequence: debug_state.command_sequence,
+            prepared: true,
+            cleanup_prepare: false,
+            general_signed_on: debug_state.general_signed_on,
+            avr_signed_on: debug_state.avr_signed_on,
+            programming_enabled: false,
+            chip,
+        }
+    }
+
+    fn save_debug_state(&self, debug_state: &mut AvrDebugState) {
+        debug_state.command_sequence = self.command_sequence;
+        debug_state.general_signed_on = self.general_signed_on;
+        debug_state.avr_signed_on = self.avr_signed_on;
     }
 
     fn query_target(&mut self, mut info: PkobnUpdiInfo) -> Result<PkobnUpdiInfo, EdbgAvrError> {
@@ -1155,6 +1220,107 @@ impl<'a> EdbgAvrTransport<'a> {
         Ok(())
     }
 
+    // ---- Debug (OCD) session management ----
+
+    fn enter_debugging_session(&mut self) -> Result<(), EdbgAvrError> {
+        if self.avr_signed_on {
+            return Ok(());
+        }
+        tracing::debug!("EDBG AVR: entering debug session for {}", self.chip.name);
+        self.prepare()?;
+        self.general_sign_on()?;
+        self.set_param(SCOPE_AVR, 0, PARM3_ARCH, &[PARM3_ARCH_UPDI])?;
+        self.set_param(SCOPE_AVR, 0, PARM3_SESS_PURPOSE, &[PARM3_SESS_DEBUGGING])?;
+        self.set_param(SCOPE_AVR, 1, PARM3_CONNECTION, &[PARM3_CONN_UPDI])?;
+        self.set_param(
+            SCOPE_AVR,
+            2,
+            PARM3_DEVICEDESC,
+            &build_updi_device_descriptor(self.chip),
+        )?;
+        let _ = self.command(&[SCOPE_AVR, CMD3_SIGN_ON, 0, 0], "AVR sign-on (debug)")?;
+        self.avr_signed_on = true;
+        // Attach to OCD module
+        let _ = self.command(&[SCOPE_AVR, CMD3_ATTACH, 0], "OCD attach")?;
+        Ok(())
+    }
+
+    fn stop_target(&mut self) -> Result<(), EdbgAvrError> {
+        self.command(&[SCOPE_AVR, CMD3_STOP, 0, 1], "stop")?;
+        Ok(())
+    }
+
+    fn run_target(&mut self) -> Result<(), EdbgAvrError> {
+        self.command(&[SCOPE_AVR, CMD3_RUN, 0], "run")?;
+        Ok(())
+    }
+
+    fn step_target(&mut self) -> Result<(), EdbgAvrError> {
+        self.command(&[SCOPE_AVR, CMD3_STEP, 0, 1, 1], "step")?;
+        Ok(())
+    }
+
+    fn read_pc(&mut self) -> Result<u32, EdbgAvrError> {
+        let response = self.command(&[SCOPE_AVR, CMD3_READ_PC, 0], "read PC")?;
+        // Response format after command() strips token+seq:
+        // [0] = scope, [1] = RSP3_PC (0x83), [2] = 0, [3..7] = PC word address LE
+        if response.len() < 6 || response[1] != RSP3_PC {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "read PC",
+                details: format!(
+                    "expected RSP3_PC response with at least 6 bytes, got {} bytes: {:02x?}",
+                    response.len(),
+                    response
+                ),
+            });
+        }
+        let word_addr = u32::from_le_bytes([response[2], response[3], response[4], response[5]]);
+        // Convert word address to byte address (AVR PC is in words)
+        Ok(word_addr * 2)
+    }
+
+    fn target_status(&mut self) -> Result<bool, EdbgAvrError> {
+        // Query test context, param TargetRunning
+        let result = self.get_param(SCOPE_AVR, SCOPE_TEST, PARM_TARGET_RUNNING, 1)?;
+        if result.is_empty() {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "target status",
+                details: "empty response".to_string(),
+            });
+        }
+        // 0 = halted, nonzero = running
+        Ok(result[0] == 0)
+    }
+
+    fn reset_target(&mut self) -> Result<(), EdbgAvrError> {
+        self.command(&[SCOPE_AVR, CMD3_RESET, 0, 1], "reset")?;
+        Ok(())
+    }
+
+    fn hw_break_set(&mut self, bp_index: u8, address: u32) -> Result<(), EdbgAvrError> {
+        // Address is byte address, firmware expects word address
+        let word_addr = address / 2;
+        let mut cmd = vec![SCOPE_AVR, CMD3_HW_BREAK_SET, 0];
+        cmd.push(bp_index + 1); // 1-based index
+        cmd.push(BP_TYPE_PROGRAM);
+        cmd.extend_from_slice(&word_addr.to_le_bytes());
+        self.command(&cmd, "hw break set")?;
+        Ok(())
+    }
+
+    fn hw_break_clear(&mut self, bp_index: u8) -> Result<(), EdbgAvrError> {
+        self.command(
+            &[SCOPE_AVR, CMD3_HW_BREAK_CLEAR, 0, bp_index + 1],
+            "hw break clear",
+        )?;
+        Ok(())
+    }
+
+    fn detach_ocd(&mut self) -> Result<(), EdbgAvrError> {
+        self.command(&[SCOPE_AVR, CMD3_DETACH, 0], "OCD detach")?;
+        Ok(())
+    }
+
     fn read_ice_firmware_version(&mut self) -> Result<IceFirmwareVersion, EdbgAvrError> {
         let params = self.get_param(SCOPE_GENERAL, 0, PARM3_HW_VER, 5)?;
         if params.len() < 5 {
@@ -1539,6 +1705,242 @@ impl<'a> EdbgAvrTransport<'a> {
         }
     }
 }
+
+// ---- Public debug API functions (called from AVR CoreInterface) ----
+
+fn ensure_debug_session(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<(), DebugProbeError> {
+    if !state.in_debug_mode {
+        debug_avr_enter(probe, chip, state)?;
+    }
+    Ok(())
+}
+
+/// Enter OCD debug mode: sign on, attach to OCD module.
+pub fn debug_avr_enter(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<(), DebugProbeError> {
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.enter_debugging_session()?;
+    state.in_debug_mode = true;
+    transport.save_debug_state(state);
+    Ok(())
+}
+
+/// Halt the target and return the PC (byte address).
+pub fn debug_avr_halt(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<u32, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.stop_target()?;
+    let pc = transport.read_pc()?;
+    transport.save_debug_state(state);
+    Ok(pc)
+}
+
+/// Resume target execution.
+pub fn debug_avr_run(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<(), DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.run_target()?;
+    transport.save_debug_state(state);
+    Ok(())
+}
+
+/// Single-step the target and return the new PC (byte address).
+pub fn debug_avr_step(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<u32, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.step_target()?;
+    let pc = transport.read_pc()?;
+    transport.save_debug_state(state);
+    Ok(pc)
+}
+
+/// Read the program counter (byte address).
+pub fn debug_avr_read_pc(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<u32, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    let pc = transport.read_pc()?;
+    transport.save_debug_state(state);
+    Ok(pc)
+}
+
+/// Query whether the target is halted (true) or running (false).
+pub fn debug_avr_status(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<bool, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    let halted = transport.target_status()?;
+    transport.save_debug_state(state);
+    Ok(halted)
+}
+
+/// Read the 32 general-purpose registers R0..R31.
+pub fn debug_avr_read_registers(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<[u8; 32], DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    let data = transport.read_memory(MTYPE_REGFILE, 0, 32)?;
+    transport.save_debug_state(state);
+    let mut regs = [0u8; 32];
+    regs.copy_from_slice(&data[..32]);
+    Ok(regs)
+}
+
+/// Read the SREG (status register).
+pub fn debug_avr_read_sreg(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<u8, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    let data = transport.read_memory(MTYPE_OCD, OCD_SREG_OFFSET, 1)?;
+    transport.save_debug_state(state);
+    Ok(data[0])
+}
+
+/// Read the stack pointer (16-bit).
+pub fn debug_avr_read_sp(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<u16, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    let data = transport.read_memory(MTYPE_OCD, OCD_SP_OFFSET, 2)?;
+    transport.save_debug_state(state);
+    Ok(u16::from_le_bytes([data[0], data[1]]))
+}
+
+/// Set a hardware breakpoint at the given byte address.
+pub fn debug_avr_hw_break_set(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+    bp_index: u8,
+    address: u32,
+) -> Result<(), DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.hw_break_set(bp_index, address)?;
+    transport.save_debug_state(state);
+    Ok(())
+}
+
+/// Clear a hardware breakpoint.
+pub fn debug_avr_hw_break_clear(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+    bp_index: u8,
+) -> Result<(), DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.hw_break_clear(bp_index)?;
+    transport.save_debug_state(state);
+    Ok(())
+}
+
+/// Reset the target through the debug transport.
+pub fn debug_avr_reset(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<(), DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    transport.reset_target()?;
+    transport.save_debug_state(state);
+    Ok(())
+}
+
+/// Read memory through the debug transport (for use while halted).
+pub fn debug_avr_read_memory(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+    memtype: u8,
+    address: u32,
+    length: u32,
+) -> Result<Vec<u8>, DebugProbeError> {
+    ensure_debug_session(probe, chip, state)?;
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    let data = transport.read_memory(memtype, address, length)?;
+    transport.save_debug_state(state);
+    Ok(data)
+}
+
+/// Clean up OCD debug session: resume target, detach, sign off.
+pub fn debug_avr_cleanup(
+    probe: &mut super::super::CmsisDap,
+    chip: &'static AvrChipDescriptor,
+    state: &mut AvrDebugState,
+) -> Result<(), DebugProbeError> {
+    if !state.in_debug_mode {
+        return Ok(());
+    }
+    let mut transport =
+        EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
+    // Resume the target before disconnecting
+    let _ = transport.run_target();
+    let _ = transport.detach_ocd();
+    let _ = transport.avr_sign_off();
+    let _ = transport.general_sign_off();
+    let _ = transport.finish_prepare();
+    state.in_debug_mode = false;
+    state.avr_signed_on = false;
+    state.general_signed_on = false;
+    state.command_sequence = 0;
+    Ok(())
+}
+
+/// Memory type constant for SRAM access in debug mode.
+pub const DEBUG_MTYPE_SRAM: u8 = MTYPE_SRAM;
+/// Memory type constant for flash access in debug mode (SPM).
+pub const DEBUG_MTYPE_FLASH: u8 = MTYPE_SPM;
+/// Memory type constant for EEPROM access in debug mode.
+pub const DEBUG_MTYPE_EEPROM: u8 = MTYPE_EEPROM;
 
 /// Run cleanup on the transport and combine any cleanup error with the main result.
 /// If both the main operation and cleanup fail, the main error takes priority and

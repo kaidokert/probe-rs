@@ -1,9 +1,8 @@
 //! AVR architecture support for UPDI-attached chips via EDBG/nEDBG probes.
 //!
-//! AVR UPDI chips have no on-chip debug interface — the only operations are
-//! flash/erase/read through the programmer. This module provides a minimal
-//! [`CoreInterface`] + [`MemoryInterface`] implementation that routes memory
-//! operations through the EDBG AVR transport layer.
+//! Provides [`CoreInterface`] + [`MemoryInterface`] that routes operations
+//! through the EDBG AVR transport layer, including OCD-based debug support
+//! (halt, step, breakpoints, register reads).
 
 use crate::{
     CoreInterface, CoreRegister, CoreStatus, CoreType, Error, MemoryInterface,
@@ -14,18 +13,23 @@ use crate::{
     probe::{
         DebugProbe,
         cmsisdap::{
-            AvrChipDescriptor, AvrMemoryRegion, CmsisDap, read_attached_pkobn_updi_region,
-            write_attached_pkobn_updi_flash,
+            AvrChipDescriptor, AvrDebugState, AvrMemoryRegion, CmsisDap, DEBUG_MTYPE_EEPROM,
+            DEBUG_MTYPE_FLASH, DEBUG_MTYPE_SRAM, debug_avr_cleanup, debug_avr_halt,
+            debug_avr_hw_break_clear, debug_avr_hw_break_set, debug_avr_read_memory,
+            debug_avr_read_pc, debug_avr_read_registers, debug_avr_read_sp, debug_avr_read_sreg,
+            debug_avr_reset, debug_avr_run, debug_avr_status, debug_avr_step,
+            read_attached_pkobn_updi_region, write_attached_pkobn_updi_flash,
         },
     },
 };
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// Minimal core state for AVR — no debug registers, no halt state.
+/// Core state for AVR, including persistent OCD debug session state.
 #[derive(Debug, Default)]
 pub struct AvrCoreState {
-    // Intentionally empty: AVR UPDI has no debug core state to cache.
+    /// Debug session state tracked across CoreInterface calls.
+    pub debug_state: AvrDebugState,
 }
 
 impl AvrCoreState {
@@ -35,52 +39,132 @@ impl AvrCoreState {
     }
 }
 
-/// Placeholder AVR register definitions.
-///
-/// AVR has no debug-accessible registers through UPDI, but the [`CoreInterface`]
-/// trait requires register accessors. We define a minimal set of stubs.
+// ---- AVR Register Definitions ----
+//
+// Register IDs:
+//   0..31  -> R0..R31 (8-bit general purpose)
+//   32     -> PC (program counter, 32-bit byte address)
+//   33     -> SP (stack pointer, 16-bit)
+//   34     -> SREG (status register, 8-bit)
+//
+// For the CoreInterface trait we need designated PC, SP, FP, and RA registers.
+// AVR GCC convention: Y (R28:R29) is the frame pointer. The return address
+// lives on the stack, not in a register, so we use a placeholder for RA.
+
+macro_rules! avr_gpr {
+    ($name:ident, $id:expr, $label:expr) => {
+        static $name: CoreRegister = CoreRegister {
+            roles: &[crate::RegisterRole::Core($label)],
+            id: RegisterId($id),
+            data_type: crate::RegisterDataType::UnsignedInteger(8),
+            unwind_rule: UnwindRule::Clear,
+        };
+    };
+}
+
+avr_gpr!(AVR_R0, 0, "R0");
+avr_gpr!(AVR_R1, 1, "R1");
+avr_gpr!(AVR_R2, 2, "R2");
+avr_gpr!(AVR_R3, 3, "R3");
+avr_gpr!(AVR_R4, 4, "R4");
+avr_gpr!(AVR_R5, 5, "R5");
+avr_gpr!(AVR_R6, 6, "R6");
+avr_gpr!(AVR_R7, 7, "R7");
+avr_gpr!(AVR_R8, 8, "R8");
+avr_gpr!(AVR_R9, 9, "R9");
+avr_gpr!(AVR_R10, 10, "R10");
+avr_gpr!(AVR_R11, 11, "R11");
+avr_gpr!(AVR_R12, 12, "R12");
+avr_gpr!(AVR_R13, 13, "R13");
+avr_gpr!(AVR_R14, 14, "R14");
+avr_gpr!(AVR_R15, 15, "R15");
+avr_gpr!(AVR_R16, 16, "R16");
+avr_gpr!(AVR_R17, 17, "R17");
+avr_gpr!(AVR_R18, 18, "R18");
+avr_gpr!(AVR_R19, 19, "R19");
+avr_gpr!(AVR_R20, 20, "R20");
+avr_gpr!(AVR_R21, 21, "R21");
+avr_gpr!(AVR_R22, 22, "R22");
+avr_gpr!(AVR_R23, 23, "R23");
+avr_gpr!(AVR_R24, 24, "R24");
+avr_gpr!(AVR_R25, 25, "R25");
+avr_gpr!(AVR_R26, 26, "R26");
+avr_gpr!(AVR_R27, 27, "R27");
+
+// R28 (Y low) serves as frame pointer in AVR GCC convention
+static AVR_R28: CoreRegister = CoreRegister {
+    roles: &[
+        crate::RegisterRole::Core("R28"),
+        crate::RegisterRole::FramePointer,
+    ],
+    id: RegisterId(28),
+    data_type: crate::RegisterDataType::UnsignedInteger(8),
+    unwind_rule: UnwindRule::Preserve,
+};
+
+avr_gpr!(AVR_R29, 29, "R29");
+avr_gpr!(AVR_R30, 30, "R30");
+avr_gpr!(AVR_R31, 31, "R31");
+
 static AVR_PC: CoreRegister = CoreRegister {
-    roles: &[crate::RegisterRole::ProgramCounter],
-    id: RegisterId(0),
-    data_type: crate::RegisterDataType::UnsignedInteger(16),
+    roles: &[
+        crate::RegisterRole::Core("PC"),
+        crate::RegisterRole::ProgramCounter,
+    ],
+    id: RegisterId(32),
+    data_type: crate::RegisterDataType::UnsignedInteger(32),
     unwind_rule: UnwindRule::SpecialRule,
 };
 
 static AVR_SP: CoreRegister = CoreRegister {
-    roles: &[crate::RegisterRole::StackPointer],
-    id: RegisterId(1),
+    roles: &[
+        crate::RegisterRole::Core("SP"),
+        crate::RegisterRole::StackPointer,
+    ],
+    id: RegisterId(33),
     data_type: crate::RegisterDataType::UnsignedInteger(16),
     unwind_rule: UnwindRule::SpecialRule,
 };
 
-static AVR_FP: CoreRegister = CoreRegister {
-    roles: &[crate::RegisterRole::FramePointer],
-    id: RegisterId(2),
-    data_type: crate::RegisterDataType::UnsignedInteger(16),
-    unwind_rule: UnwindRule::Preserve,
+static AVR_SREG: CoreRegister = CoreRegister {
+    roles: &[
+        crate::RegisterRole::Core("SREG"),
+        crate::RegisterRole::ProcessorStatus,
+    ],
+    id: RegisterId(34),
+    data_type: crate::RegisterDataType::UnsignedInteger(8),
+    unwind_rule: UnwindRule::SpecialRule,
 };
 
+// Return address placeholder — AVR pushes RA onto the stack, there is no
+// dedicated RA register. We alias it to R30 (Z low) as a best-effort stand-in.
 static AVR_RA: CoreRegister = CoreRegister {
-    roles: &[crate::RegisterRole::ReturnAddress],
-    id: RegisterId(3),
-    data_type: crate::RegisterDataType::UnsignedInteger(16),
+    roles: &[
+        crate::RegisterRole::Core("RA"),
+        crate::RegisterRole::ReturnAddress,
+    ],
+    id: RegisterId(30),
+    data_type: crate::RegisterDataType::UnsignedInteger(8),
     unwind_rule: UnwindRule::SpecialRule,
 };
 
-/// The minimal AVR register set (placeholder — registers are not accessible via UPDI).
-pub static AVR_CORE_REGISTERS: LazyLock<CoreRegisters> =
-    LazyLock::new(|| CoreRegisters::new(vec![&AVR_PC, &AVR_SP, &AVR_FP, &AVR_RA]));
+/// All AVR registers exposed through the debug interface.
+pub static AVR_CORE_REGISTERS: LazyLock<CoreRegisters> = LazyLock::new(|| {
+    CoreRegisters::new(vec![
+        &AVR_R0, &AVR_R1, &AVR_R2, &AVR_R3, &AVR_R4, &AVR_R5, &AVR_R6, &AVR_R7, &AVR_R8, &AVR_R9,
+        &AVR_R10, &AVR_R11, &AVR_R12, &AVR_R13, &AVR_R14, &AVR_R15, &AVR_R16, &AVR_R17, &AVR_R18,
+        &AVR_R19, &AVR_R20, &AVR_R21, &AVR_R22, &AVR_R23, &AVR_R24, &AVR_R25, &AVR_R26, &AVR_R27,
+        &AVR_R28, &AVR_R29, &AVR_R30, &AVR_R31, &AVR_PC, &AVR_SP, &AVR_SREG,
+    ])
+});
 
-/// An AVR "core" that implements memory operations through the EDBG transport.
+/// An AVR core that implements memory and debug operations through the EDBG transport.
 ///
-/// This is not a true debug core — halt, step, breakpoints, and register access
-/// are all unsupported. The core exists solely to provide a [`MemoryInterface`]
-/// so that the standard probe-rs read/write/download paths work without
-/// architecture-specific branching in session.rs or memory.rs.
+/// Supports halt, step, breakpoints, and register reads through the OCD module,
+/// as well as flash/erase/read through the programming interface.
 pub struct Avr<'probe> {
     probe: &'probe mut CmsisDap,
     chip: &'static AvrChipDescriptor,
-    #[allow(dead_code)]
     state: &'probe mut AvrCoreState,
 }
 
@@ -144,6 +228,32 @@ impl<'probe> Avr<'probe> {
             chip.name
         )))
     }
+
+    /// Map an absolute data-space address to a (debug memtype, address) pair for
+    /// use when the OCD debug transport is active.
+    fn debug_address_to_memtype(&self, address: u64) -> Result<(u8, u32), Error> {
+        let addr = u32::try_from(address).map_err(|_| {
+            Error::Other(format!("AVR address {address:#010x} exceeds 32-bit range"))
+        })?;
+        let chip = self.chip;
+
+        // Flash (0-based or data-space mapped)
+        if addr < chip.flash_size {
+            return Ok((DEBUG_MTYPE_FLASH, addr));
+        }
+        if chip.flash_base > 0
+            && addr >= chip.flash_base
+            && addr < chip.flash_base + chip.flash_size
+        {
+            return Ok((DEBUG_MTYPE_FLASH, addr - chip.flash_base));
+        }
+        // EEPROM
+        if addr >= chip.eeprom_base && addr < chip.eeprom_base + chip.eeprom_size {
+            return Ok((DEBUG_MTYPE_EEPROM, addr));
+        }
+        // Everything else in the data space (SRAM, IO, peripherals)
+        Ok((DEBUG_MTYPE_SRAM, addr))
+    }
 }
 
 // ---- MemoryInterface (directly on Avr, since we own the probe) ----
@@ -187,19 +297,45 @@ impl MemoryInterface for Avr<'_> {
         if data.is_empty() {
             return Ok(());
         }
-        let (region, offset) = self.address_to_region(address)?;
-        let length = u32::try_from(data.len())
-            .map_err(|_| Error::Other("AVR read length exceeds 32-bit range".to_string()))?;
-        let bytes = read_attached_pkobn_updi_region(self.probe, self.chip, region, offset, length)?;
-        if bytes.len() < data.len() {
-            return Err(Error::Other(format!(
-                "AVR read returned {} bytes, expected {}",
-                bytes.len(),
-                data.len()
-            )));
+        if self.state.debug_state.in_debug_mode {
+            // In debug mode, use the debug transport directly
+            let (memtype, addr) = self.debug_address_to_memtype(address)?;
+            let length = u32::try_from(data.len())
+                .map_err(|_| Error::Other("AVR read length exceeds 32-bit range".to_string()))?;
+            let bytes = debug_avr_read_memory(
+                self.probe,
+                self.chip,
+                &mut self.state.debug_state,
+                memtype,
+                addr,
+                length,
+            )?;
+            if bytes.len() < data.len() {
+                return Err(Error::Other(format!(
+                    "AVR debug read returned {} bytes, expected {}",
+                    bytes.len(),
+                    data.len()
+                )));
+            }
+            data.copy_from_slice(&bytes[..data.len()]);
+            Ok(())
+        } else {
+            // Programming mode path
+            let (region, offset) = self.address_to_region(address)?;
+            let length = u32::try_from(data.len())
+                .map_err(|_| Error::Other("AVR read length exceeds 32-bit range".to_string()))?;
+            let bytes =
+                read_attached_pkobn_updi_region(self.probe, self.chip, region, offset, length)?;
+            if bytes.len() < data.len() {
+                return Err(Error::Other(format!(
+                    "AVR read returned {} bytes, expected {}",
+                    bytes.len(),
+                    data.len()
+                )));
+            }
+            data.copy_from_slice(&bytes[..data.len()]);
+            Ok(())
         }
-        data.copy_from_slice(&bytes[..data.len()]);
-        Ok(())
     }
 
     fn read(&mut self, address: u64, data: &mut [u8]) -> Result<(), Error> {
@@ -248,74 +384,169 @@ impl MemoryInterface for Avr<'_> {
     }
 }
 
-// ---- CoreInterface (stub: most operations are unsupported) ----
+// ---- CoreInterface (OCD debug support) ----
 
 impl CoreInterface for Avr<'_> {
-    fn wait_for_core_halted(&mut self, _timeout: Duration) -> Result<(), Error> {
-        Err(Error::NotImplemented("AVR: halt/debug not supported"))
+    fn wait_for_core_halted(&mut self, timeout: Duration) -> Result<(), Error> {
+        let start = Instant::now();
+        loop {
+            match debug_avr_status(self.probe, self.chip, &mut self.state.debug_state) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    if start.elapsed() >= timeout {
+                        return Err(Error::Timeout);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => return Err(Error::Probe(e)),
+            }
+        }
     }
 
     fn core_halted(&mut self) -> Result<bool, Error> {
-        // AVR UPDI has no debug core — report as "halted" so that callers
-        // like halted_access() don't attempt to halt the core (which would
-        // fail with NotImplemented).
-        Ok(true)
+        if !self.state.debug_state.in_debug_mode {
+            // Not in debug mode yet — report halted for compatibility with
+            // callers that check before entering debug mode.
+            return Ok(true);
+        }
+        debug_avr_status(self.probe, self.chip, &mut self.state.debug_state).map_err(Error::Probe)
     }
 
     fn status(&mut self) -> Result<CoreStatus, Error> {
-        // Report halted so that callers like halted_access() don't try to
-        // halt us (which would fail). AVR has no real halt/run distinction
-        // through UPDI.
-        Ok(CoreStatus::Halted(crate::HaltReason::Request))
+        if !self.state.debug_state.in_debug_mode {
+            return Ok(CoreStatus::Unknown);
+        }
+        let halted = debug_avr_status(self.probe, self.chip, &mut self.state.debug_state)
+            .map_err(Error::Probe)?;
+        if halted {
+            Ok(CoreStatus::Halted(crate::HaltReason::Request))
+        } else {
+            Ok(CoreStatus::Running)
+        }
     }
 
     fn halt(&mut self, _timeout: Duration) -> Result<CoreInformation, Error> {
-        Err(Error::NotImplemented("AVR: halt not supported"))
+        let pc = debug_avr_halt(self.probe, self.chip, &mut self.state.debug_state)
+            .map_err(Error::Probe)?;
+        Ok(CoreInformation { pc: pc as u64 })
     }
 
     fn run(&mut self) -> Result<(), Error> {
-        // No-op: the core is always running.
-        Ok(())
+        debug_avr_run(self.probe, self.chip, &mut self.state.debug_state).map_err(Error::Probe)
     }
 
     fn reset(&mut self) -> Result<(), Error> {
-        // Use probe-level reset (CMSIS-DAP DAP_ResetTarget or nRST toggle).
-        self.probe.target_reset().map_err(Error::from)
+        if self.state.debug_state.in_debug_mode {
+            debug_avr_reset(self.probe, self.chip, &mut self.state.debug_state)
+                .map_err(Error::Probe)
+        } else {
+            self.probe.target_reset().map_err(Error::from)
+        }
     }
 
     fn reset_and_halt(&mut self, _timeout: Duration) -> Result<CoreInformation, Error> {
-        Err(Error::NotImplemented("AVR: reset_and_halt not supported"))
+        // Enter debug mode, reset, then halt
+        debug_avr_reset(self.probe, self.chip, &mut self.state.debug_state)
+            .map_err(Error::Probe)?;
+        let pc = debug_avr_halt(self.probe, self.chip, &mut self.state.debug_state)
+            .map_err(Error::Probe)?;
+        Ok(CoreInformation { pc: pc as u64 })
     }
 
     fn step(&mut self) -> Result<CoreInformation, Error> {
-        Err(Error::NotImplemented("AVR: single-step not supported"))
+        let pc = debug_avr_step(self.probe, self.chip, &mut self.state.debug_state)
+            .map_err(Error::Probe)?;
+        Ok(CoreInformation { pc: pc as u64 })
     }
 
-    fn read_core_reg(&mut self, _address: RegisterId) -> Result<RegisterValue, Error> {
-        Err(Error::NotImplemented("AVR: register access not supported"))
+    fn read_core_reg(&mut self, address: RegisterId) -> Result<RegisterValue, Error> {
+        let id = address.0;
+        match id {
+            0..=31 => {
+                let regs =
+                    debug_avr_read_registers(self.probe, self.chip, &mut self.state.debug_state)
+                        .map_err(Error::Probe)?;
+                Ok(RegisterValue::U32(regs[id as usize] as u32))
+            }
+            32 => {
+                // PC
+                let pc = debug_avr_read_pc(self.probe, self.chip, &mut self.state.debug_state)
+                    .map_err(Error::Probe)?;
+                Ok(RegisterValue::U32(pc))
+            }
+            33 => {
+                // SP
+                let sp = debug_avr_read_sp(self.probe, self.chip, &mut self.state.debug_state)
+                    .map_err(Error::Probe)?;
+                Ok(RegisterValue::U32(sp as u32))
+            }
+            34 => {
+                // SREG
+                let sreg = debug_avr_read_sreg(self.probe, self.chip, &mut self.state.debug_state)
+                    .map_err(Error::Probe)?;
+                Ok(RegisterValue::U32(sreg as u32))
+            }
+            _ => Err(Error::Other(format!("AVR: unknown register id {}", id))),
+        }
     }
 
     fn write_core_reg(&mut self, _address: RegisterId, _value: RegisterValue) -> Result<(), Error> {
-        Err(Error::NotImplemented("AVR: register access not supported"))
+        Err(Error::NotImplemented(
+            "AVR: register writes not yet supported",
+        ))
     }
 
     fn available_breakpoint_units(&mut self) -> Result<u32, Error> {
-        Ok(0)
+        Ok(1)
     }
 
     fn hw_breakpoints(&mut self) -> Result<Vec<Option<u64>>, Error> {
-        Ok(vec![])
+        Ok(vec![self.state.debug_state.hw_breakpoint])
     }
 
     fn enable_breakpoints(&mut self, _state: bool) -> Result<(), Error> {
         Ok(())
     }
 
-    fn set_hw_breakpoint(&mut self, _unit_index: usize, _addr: u64) -> Result<(), Error> {
-        Err(Error::NotImplemented("AVR: breakpoints not supported"))
+    fn set_hw_breakpoint(&mut self, unit_index: usize, addr: u64) -> Result<(), Error> {
+        if unit_index != 0 {
+            return Err(Error::Other(format!(
+                "AVR: breakpoint unit {} out of range (max 1)",
+                unit_index
+            )));
+        }
+        let addr32 = u32::try_from(addr).map_err(|_| {
+            Error::Other(format!(
+                "AVR breakpoint address {addr:#x} exceeds 32-bit range"
+            ))
+        })?;
+        debug_avr_hw_break_set(
+            self.probe,
+            self.chip,
+            &mut self.state.debug_state,
+            unit_index as u8,
+            addr32,
+        )
+        .map_err(Error::Probe)?;
+        self.state.debug_state.hw_breakpoint = Some(addr);
+        Ok(())
     }
 
-    fn clear_hw_breakpoint(&mut self, _unit_index: usize) -> Result<(), Error> {
+    fn clear_hw_breakpoint(&mut self, unit_index: usize) -> Result<(), Error> {
+        if unit_index != 0 {
+            return Err(Error::Other(format!(
+                "AVR: breakpoint unit {} out of range (max 1)",
+                unit_index
+            )));
+        }
+        debug_avr_hw_break_clear(
+            self.probe,
+            self.chip,
+            &mut self.state.debug_state,
+            unit_index as u8,
+        )
+        .map_err(Error::Probe)?;
+        self.state.debug_state.hw_breakpoint = None;
         Ok(())
     }
 
@@ -328,7 +559,7 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn frame_pointer(&self) -> &'static CoreRegister {
-        &AVR_FP
+        &AVR_R28
     }
 
     fn stack_pointer(&self) -> &'static CoreRegister {
@@ -340,7 +571,7 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn hw_breakpoints_enabled(&self) -> bool {
-        false
+        self.state.debug_state.in_debug_mode
     }
 
     fn architecture(&self) -> Architecture {
@@ -372,7 +603,6 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn debug_core_stop(&mut self) -> Result<(), Error> {
-        // No-op: there's nothing to clean up.
-        Ok(())
+        debug_avr_cleanup(self.probe, self.chip, &mut self.state.debug_state).map_err(Error::Probe)
     }
 }
