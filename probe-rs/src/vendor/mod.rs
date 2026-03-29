@@ -21,6 +21,7 @@ use crate::{
     probe::{Probe, WireProtocol},
     rtt::ScanRegion,
 };
+
 pub mod amd;
 pub mod holtek;
 pub mod infineon;

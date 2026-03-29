@@ -62,7 +62,11 @@ impl From<&TargetInfoRequest> for ProbeOptions {
         ProbeOptions {
             chip: None,
             chip_description_path: None,
-            protocol: Some(request.protocol.into()),
+            protocol: match request.protocol {
+                WireProtocol::Jtag => Some(ProbeRsWireProtocol::Jtag),
+                WireProtocol::Swd => Some(ProbeRsWireProtocol::Swd),
+                WireProtocol::Updi => Some(ProbeRsWireProtocol::Updi),
+            },
             non_interactive: true,
             probe: Some(request.probe.selector().into()),
             speed: request.speed,

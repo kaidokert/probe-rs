@@ -7,9 +7,11 @@ use object::read::elf::{FileHeader as _, ProgramHeader as _};
 
 use crate::rpc::client::RpcClient;
 
+use crate::FormatKind;
+use crate::FormatOptions;
 use crate::util::cli;
-use crate::util::common_options::{BinaryDownloadOptions, ProbeOptions};
-use crate::{FormatKind, FormatOptions};
+use crate::util::common_options::BinaryDownloadOptions;
+use crate::util::common_options::ProbeOptions;
 use probe_rs::probe::WireProtocol;
 
 #[derive(clap::Parser)]
