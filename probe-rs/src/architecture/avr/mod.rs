@@ -97,7 +97,12 @@ impl<'probe> Avr<'probe> {
     /// Map an absolute address to an (AvrMemoryRegion, region-relative offset) pair.
     ///
     /// The address space layout uses the chip descriptor's base addresses:
+    /// Flash is addressed as 0-based offsets (`[0 .. flash_size)`), but we also accept
+    /// the data-space mapping (`[flash_base .. flash_base + flash_size)`) and translate it
+    /// back to a 0-based offset automatically.
+    ///
     /// - `[0 .. flash_size)` -> Flash (region offset = address)
+    /// - `[flash_base .. flash_base + flash_size)` -> Flash (region offset = address - flash_base)
     /// - `[eeprom_base .. eeprom_base + eeprom_size)` -> EEPROM
     /// - `[fuses_base .. fuses_base + fuses_size)` -> Fuses
     /// - `[lock_base .. lock_base + lock_size)` -> Lock
@@ -111,6 +116,12 @@ impl<'probe> Avr<'probe> {
 
         if addr < chip.flash_size {
             return Ok((AvrMemoryRegion::Flash, addr));
+        }
+        if chip.flash_base > 0
+            && addr >= chip.flash_base
+            && addr < chip.flash_base + chip.flash_size
+        {
+            return Ok((AvrMemoryRegion::Flash, addr - chip.flash_base));
         }
         if addr >= chip.eeprom_base && addr < chip.eeprom_base + chip.eeprom_size {
             return Ok((AvrMemoryRegion::Eeprom, addr - chip.eeprom_base));

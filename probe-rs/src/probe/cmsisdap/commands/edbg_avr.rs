@@ -454,7 +454,7 @@ pub fn query_attached_pkobn_updi(
         cmsis_dap_product: None,
         cmsis_dap_serial: None,
         cmsis_dap_firmware_version: None,
-        cmsis_dap_packet_size: 0,
+        cmsis_dap_packet_size: probe.packet_size,
         ice_serial: None,
         ice_firmware_version: IceFirmwareVersion {
             hardware: 0,
@@ -1407,7 +1407,17 @@ impl<'a> EdbgAvrTransport<'a> {
                         details: format!("unexpected response prefix {:02x?}", response),
                     });
                 }
-                if response.get(1).copied() == Some(0) {
+                if response.len() < 2 {
+                    return Err(EdbgAvrError::UnexpectedResponse {
+                        context: "EDBG receive",
+                        details: format!(
+                            "vendor response too short: got {} byte(s), need at least 2",
+                            response.len()
+                        ),
+                    });
+                }
+
+                if response[1] == 0 {
                     return Err(EdbgAvrError::UnexpectedResponse {
                         context: "EDBG receive",
                         details: "no response data available".to_string(),

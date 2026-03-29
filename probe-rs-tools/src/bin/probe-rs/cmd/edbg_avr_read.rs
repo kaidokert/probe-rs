@@ -241,6 +241,10 @@ impl Cmd {
             .context("requested read length overflowed")?;
         let byte_len =
             u32::try_from(byte_len).context("requested read length exceeds 32-bit range")?;
+        anyhow::ensure!(
+            byte_len > 0,
+            "requested read length must be greater than zero"
+        );
         let offset = u32::try_from(self.read_write_options.address)
             .context("region-relative AVR address exceeds 32-bit range")?;
 

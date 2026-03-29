@@ -271,10 +271,13 @@ fn merge_flash_blocks(mut blocks: Vec<FlashBlock>) -> anyhow::Result<Vec<FlashBl
     let mut merged: Vec<FlashBlock> = Vec::new();
     for block in blocks {
         if let Some(previous) = merged.last_mut() {
-            let previous_end = previous.address.saturating_add(
-                u32::try_from(previous.data.len())
-                    .context("flash block length exceeds 32-bit range")?,
-            );
+            let previous_end = previous
+                .address
+                .checked_add(
+                    u32::try_from(previous.data.len())
+                        .context("flash block length exceeds 32-bit range")?,
+                )
+                .ok_or_else(|| anyhow::anyhow!("flash block end address overflows 32-bit range"))?;
             if previous_end == block.address {
                 previous.data.extend_from_slice(&block.data);
                 continue;

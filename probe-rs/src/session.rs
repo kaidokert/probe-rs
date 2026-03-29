@@ -199,6 +199,13 @@ impl Session {
         Ok(session)
     }
 
+    /// Create an AVR stub session.
+    ///
+    /// Unlike ARM/RISC-V, no SWD/JTAG-level attach is performed here — the probe
+    /// is already connected at the CMSIS-DAP level (opened during probe selection).
+    /// The EDBG/JTAG3 sign-on and programming-mode entry happen lazily on the first
+    /// memory operation (e.g. `enter_programming_session`), so storing the probe
+    /// without an explicit attach step is intentional.
     fn attach_avr_stub(
         probe: Probe,
         target: Target,
