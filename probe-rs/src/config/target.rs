@@ -118,6 +118,7 @@ impl Target {
                 Architecture::Arm => DebugSequence::Arm(DefaultArmSequence::create()),
                 Architecture::Riscv => DebugSequence::Riscv(DefaultRiscvSequence::create()),
                 Architecture::Xtensa => DebugSequence::Xtensa(DefaultXtensaSequence::create()),
+                Architecture::Avr => DebugSequence::Avr(()),
             }
         });
 
@@ -143,6 +144,15 @@ impl Target {
 
     /// Get the architecture of the target
     pub fn architecture(&self) -> Architecture {
+        if self.cores.is_empty() {
+            return match &self.debug_sequence {
+                DebugSequence::Arm(_) => Architecture::Arm,
+                DebugSequence::Riscv(_) => Architecture::Riscv,
+                DebugSequence::Xtensa(_) => Architecture::Xtensa,
+                DebugSequence::Avr(_) => Architecture::Avr,
+            };
+        }
+
         let target_arch = self.cores[0].core_type.architecture();
 
         // This should be ensured when a `ChipFamily` is loaded.
@@ -266,6 +276,8 @@ pub enum DebugSequence {
     Riscv(Arc<dyn RiscvDebugSequence>),
     /// An Xtensa debug sequence.
     Xtensa(Arc<dyn XtensaDebugSequence>),
+    /// An AVR debug sequence.
+    Avr(()),
 }
 
 pub(crate) trait CoreExt {

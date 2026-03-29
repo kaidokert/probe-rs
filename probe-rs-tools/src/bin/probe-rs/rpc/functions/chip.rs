@@ -137,6 +137,7 @@ impl From<probe_rs_target::Core> for Core {
 }
 
 /// Type of a supported core.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub enum CoreType {
     /// ARMv6-M: Cortex M0, M0+, M1
@@ -157,6 +158,8 @@ pub enum CoreType {
     Riscv,
     /// Xtensa - TODO: may need to split into NX, LX6 and LX7
     Xtensa,
+    /// AVR
+    AVR, // TODO: Add AVR core type when needed.
 }
 
 impl From<probe_rs_target::CoreType> for CoreType {

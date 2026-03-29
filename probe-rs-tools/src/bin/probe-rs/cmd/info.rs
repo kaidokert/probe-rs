@@ -1,6 +1,6 @@
 use std::{fmt::Display, num::ParseIntError};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use jep106::JEP106Code;
 use probe_rs::{
     architecture::arm::{
@@ -49,10 +49,14 @@ fn parse_hex(src: &str) -> Result<u32, ParseIntError> {
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        let protocols = if let Some(protocol) = self.common.protocol {
-            vec![protocol]
-        } else {
-            vec![WireProtocol::Jtag, WireProtocol::Swd]
+        let mut had_success = false;
+        let mut last_error = None;
+
+        let protocols = match self.common.protocol {
+            Some(WireProtocol::Jtag) => vec![WireProtocol::Jtag],
+            Some(WireProtocol::Swd) => vec![WireProtocol::Swd],
+            Some(WireProtocol::Updi) => vec![WireProtocol::Updi],
+            None => vec![WireProtocol::Jtag, WireProtocol::Swd],
         };
 
         let probe = select_probe(&client, self.common.probe.map(Into::into)).await?;
@@ -65,6 +69,7 @@ impl Cmd {
 
             let mut successes = vec![];
             let mut errors = vec![];
+            let mut probe_succeeded = false;
 
             let req = TargetInfoRequest {
                 target_sel: self.target_sel,
@@ -88,6 +93,7 @@ impl Cmd {
                     }
 
                     if is_success {
+                        probe_succeeded = true;
                         successes.push(message);
                     } else {
                         errors.push(message);
@@ -96,21 +102,29 @@ impl Cmd {
                 .await;
 
             if let Err(error) = result {
+                last_error = Some(anyhow!("{error}"));
                 println!("Error while probing target: {error}");
             }
 
-            if successes.is_empty() {
-                for message in errors {
+            if probe_succeeded {
+                had_success = true;
+                for message in successes {
                     println!("{message}");
                 }
             } else {
-                for message in successes {
+                for message in errors {
                     println!("{message}");
                 }
             }
         }
 
-        Ok(())
+        if had_success {
+            Ok(())
+        } else if let Some(error) = last_error {
+            Err(error)
+        } else {
+            Err(anyhow!("probing target produced no successful results"))
+        }
     }
 }
 
