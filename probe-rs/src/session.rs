@@ -191,7 +191,12 @@ impl Session {
             Architecture::Riscv | Architecture::Xtensa => {
                 Self::attach_jtag(probe, target, attach_method, permissions, cores)?
             }
-            Architecture::Avr => Self::attach_avr_stub(probe, target, cores)?,
+            Architecture::Avr => {
+                if attach_method == AttachMethod::UnderReset {
+                    tracing::warn!("--connect-under-reset has no effect for AVR UPDI targets");
+                }
+                Self::attach_avr_stub(probe, target, cores)?
+            }
         };
 
         session.clear_all_hw_breakpoints()?;
