@@ -99,7 +99,12 @@ impl OutputFormat {
         width: ReadWriteBitWidth,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        let bytes = width.byte_width();
+        let bytes = match width {
+            ReadWriteBitWidth::B8 => 1,
+            ReadWriteBitWidth::B16 => 2,
+            ReadWriteBitWidth::B32 => 4,
+            ReadWriteBitWidth::B64 => 8,
+        };
         let mut first = true;
         for window in data.chunks(bytes) {
             if first {
@@ -227,7 +232,12 @@ impl Cmd {
         let region: AvrMemoryRegion = self.region.into();
         let byte_len = self
             .words
-            .checked_mul(self.read_write_options.width.byte_width())
+            .checked_mul(match self.read_write_options.width {
+                ReadWriteBitWidth::B8 => 1,
+                ReadWriteBitWidth::B16 => 2,
+                ReadWriteBitWidth::B32 => 4,
+                ReadWriteBitWidth::B64 => 8,
+            })
             .context("requested read length overflowed")?;
         let byte_len =
             u32::try_from(byte_len).context("requested read length exceeds 32-bit range")?;

@@ -1,59 +1,18 @@
 use anyhow::Context;
 use ihex::Record;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use itertools::Itertools;
+
+use crate::rpc::client::{CoreInterface, RpcClient};
 
 use crate::CoreOptions;
-use crate::rpc::client::{CoreInterface, RpcClient};
 use crate::util::cli;
 use crate::util::common_options::{ProbeOptions, ReadWriteBitWidth, ReadWriteOptions};
 use probe_rs::probe::WireProtocol;
-
-/// Read from target memory address
-///
-/// e.g. probe-rs read b32 0x400E1490 2
-///      Reads 2 32-bit words from address 0x400E1490
-///
-/// e.g. probe-rs read --protocol updi --region eeprom b8 0x00 16
-///      Reads 16 bytes from EEPROM offset 0x00 on the narrow AVR UPDI path
-///
-/// Default output is a space separated list of hex values padded to the read word width.
-/// e.g. 2 words
-///     00 00 (8-bit)
-///     00000000 00000000 (32-bit)
-///     0000000000000000 0000000000000000 (64-bit)
-///
-/// If the --output argument is provided, readback data is instead saved to a file as hex/bin.
-/// In this case, the read word width has no effect except determining the total number of bytes
-#[derive(clap::Parser)]
-#[clap(verbatim_doc_comment)]
-pub struct Cmd {
-    #[clap(flatten)]
-    shared: CoreOptions,
-
-    #[clap(flatten)]
-    probe_options: ProbeOptions,
-
-    #[clap(flatten)]
-    read_write_options: ReadWriteOptions,
-
-    /// Number of words to read from the target
-    words: usize,
-
-    /// File to output binary data to
-    #[arg(long, short)]
-    output: Option<PathBuf>,
-
-    /// Format of the outputted binary data
-    #[clap(value_enum, default_value_t=OutputFormat::HexTable)]
-    #[arg(long, short)]
-    format: OutputFormat,
-}
-
-// ---------- OutputFormat (copied from the former read_output.rs) ----------
+use std::io::Write;
+use std::path::PathBuf;
 
 #[derive(clap::ValueEnum, Clone, Copy)]
-pub(crate) enum OutputFormat {
+enum OutputFormat {
     /// Intel Hex Format
     Ihex,
     /// Simple list of hexadecimal numbers
@@ -65,7 +24,7 @@ pub(crate) enum OutputFormat {
 }
 
 impl OutputFormat {
-    pub(crate) fn write(
+    fn write(
         self,
         dst: impl Write,
         address: u64,
@@ -80,37 +39,17 @@ impl OutputFormat {
         }
     }
 
-    pub(crate) fn save_to_file(
-        self,
-        address: u64,
-        width: ReadWriteBitWidth,
-        data: &[u8],
-        path: &Path,
-    ) -> anyhow::Result<()> {
-        // Write to an in-memory buffer first so we don't truncate the output
-        // file if format validation or serialization fails.
-        let mut buf = Vec::new();
-        self.write(&mut buf, address, width, data)?;
-        std::fs::write(path, &buf)?;
-        Ok(())
-    }
-
-    pub(crate) fn print_to_console(
-        self,
-        address: u64,
-        width: ReadWriteBitWidth,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        let mut stdout = std::io::stdout();
-        self.write(&mut stdout, address, width, data)
-    }
-
     fn write_simple_hex(
         mut dst: impl Write,
         width: ReadWriteBitWidth,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        let bytes = width.byte_width();
+        let bytes = match width {
+            ReadWriteBitWidth::B8 => 1,
+            ReadWriteBitWidth::B16 => 2,
+            ReadWriteBitWidth::B32 => 4,
+            ReadWriteBitWidth::B64 => 8,
+        };
 
         let mut first = true;
         for window in data.chunks(bytes) {
@@ -151,77 +90,107 @@ impl OutputFormat {
 
     fn write_binary(mut dst: impl Write, data: &[u8]) -> anyhow::Result<()> {
         dst.write_all(data)?;
+
         Ok(())
     }
 
     fn write_ihex(mut dst: impl Write, address: u64, data: &[u8]) -> anyhow::Result<()> {
         let mut running_address = address;
         let mut records = vec![];
-        let mut last_address_msbs: Option<u16> = None;
 
-        let mut remaining = data;
-        while !remaining.is_empty() {
+        for chunk in &data.iter().copied().chunks(255) {
             let address_msbs: u16 = (running_address >> 16)
                 .try_into()
                 .context("Hex format only supports addressing up to 32 bits")?;
 
-            // Emit an extended linear address record when crossing a 64 KiB boundary.
-            if last_address_msbs != Some(address_msbs) {
-                records.push(Record::ExtendedLinearAddress(address_msbs));
-                last_address_msbs = Some(address_msbs);
-            }
-
-            // Limit the chunk so it doesn't cross a 64 KiB segment boundary.
-            let bytes_until_boundary = 0x10000u64.saturating_sub(running_address & 0xFFFF);
-            let chunk_len = remaining
-                .len()
-                .min(255)
-                .min(bytes_until_boundary as usize)
-                .max(1);
+            records.push(Record::ExtendedLinearAddress(address_msbs));
 
             records.push(Record::Data {
                 offset: (running_address & 0xFFFF) as u16,
-                value: remaining[..chunk_len].to_vec(),
+                value: chunk.collect(),
             });
-            remaining = &remaining[chunk_len..];
-            running_address += chunk_len as u64;
+            running_address += 255;
         }
-
         records.push(Record::EndOfFile);
         let hexdata = ihex::create_object_file_representation(&records)?;
         dst.write_all(hexdata.as_bytes())?;
+
         Ok(())
     }
 }
 
-// ---------- Command implementation ----------
+/// Read from target memory address
+///
+/// e.g. probe-rs read b32 0x400E1490 2
+///      Reads 2 32-bit words from address 0x400E1490
+///
+/// Default output is a space separated list of hex values padded to the read word width.
+/// e.g. 2 words
+///     00 00 (8-bit)
+///     00000000 00000000 (32-bit)
+///     0000000000000000 0000000000000000 (64-bit)
+///
+/// If the --output argument is provided, readback data is instead saved to a file as hex/bin.
+/// In this case, the read word width has no effect except determining the total number of bytes
+#[derive(clap::Parser)]
+#[clap(verbatim_doc_comment)]
+pub struct Cmd {
+    #[clap(flatten)]
+    shared: CoreOptions,
+
+    #[clap(flatten)]
+    probe_options: ProbeOptions,
+
+    #[clap(flatten)]
+    read_write_options: ReadWriteOptions,
+
+    /// Number of words to read from the target
+    words: usize,
+
+    /// File to output binary data to
+    #[arg(long, short)]
+    output: Option<PathBuf>,
+
+    /// Format of the outputted binary data
+    #[clap(value_enum, default_value_t=OutputFormat::HexTable)]
+    #[arg(long, short)]
+    format: OutputFormat,
+}
 
 impl Cmd {
     pub async fn run(self, client: RpcClient) -> anyhow::Result<()> {
-        let session = cli::attach_probe(&client, self.probe_options.clone(), false).await?;
+        let is_updi = self.probe_options.protocol == Some(WireProtocol::Updi);
+        let session = cli::attach_probe(&client, self.probe_options, false).await?;
         let core = session.core(self.shared.core);
-        let address = self.read_write_options.address;
 
-        let data =
-            Self::read_memory(core, address, self.read_write_options.width, self.words).await?;
-
-        if self.probe_options.protocol != Some(WireProtocol::Updi) {
-            session.resume_all_cores().await?;
-        }
+        let data = Self::read_memory(
+            core,
+            self.read_write_options.address,
+            self.read_write_options.width,
+            self.words,
+        )
+        .await?;
 
         match self.output {
-            Some(path) => self.format.save_to_file(
+            Some(path) => Self::save_to_file(
                 self.read_write_options.address,
-                self.read_write_options.width,
                 &data,
-                &path,
+                path,
+                self.read_write_options.width,
+                self.format,
             )?,
-            None => self.format.print_to_console(
+            None => Self::print_to_console(
                 self.read_write_options.address,
-                self.read_write_options.width,
                 &data,
+                self.read_write_options.width,
+                self.format,
             )?,
         };
+
+        // AVR UPDI sessions have no debug cores to resume.
+        if !is_updi {
+            session.resume_all_cores().await?;
+        }
 
         Ok(())
     }
@@ -263,5 +232,28 @@ impl Cmd {
             }
         };
         Ok(bytes)
+    }
+
+    fn save_to_file(
+        address: u64,
+        data: &[u8],
+        path: PathBuf,
+        width: ReadWriteBitWidth,
+        format: OutputFormat,
+    ) -> anyhow::Result<()> {
+        let mut file = std::fs::File::create(path)?;
+        format.write(&mut file, address, width, data)?;
+        Ok(())
+    }
+
+    fn print_to_console(
+        address: u64,
+        data: &[u8],
+        width: ReadWriteBitWidth,
+        format: OutputFormat,
+    ) -> anyhow::Result<()> {
+        let mut stdout = std::io::stdout();
+        format.write(&mut stdout, address, width, data)?;
+        Ok(())
     }
 }
