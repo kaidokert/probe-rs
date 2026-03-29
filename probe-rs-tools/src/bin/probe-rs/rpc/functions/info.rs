@@ -23,11 +23,12 @@ use probe_rs::{
             XtensaCommunicationInterface, XtensaDebugInterfaceState,
         },
     },
-    probe::{Probe, WireProtocol as ProbeRsWireProtocol},
+    probe::{Probe, WireProtocol as ProbeRsWireProtocol, cmsisdap::query_pkobn_updi},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    cmd::edbg_avr_info,
     rpc::functions::{
         NoResponse, RpcContext, TargetInfoDataTopic,
         chip::JEP106Code,
@@ -51,10 +52,7 @@ impl From<&TargetInfoRequest> for ProbeOptions {
         ProbeOptions {
             chip: None,
             chip_description_path: None,
-            protocol: match request.protocol {
-                WireProtocol::Jtag => Some(ProbeRsWireProtocol::Jtag),
-                WireProtocol::Swd => Some(ProbeRsWireProtocol::Swd),
-            },
+            protocol: Some(request.protocol.into()),
             non_interactive: true,
             probe: Some(request.probe.selector().into()),
             speed: request.speed,
@@ -78,6 +76,7 @@ pub async fn target_info(
     if let Err(e) = try_show_info(
         ctx,
         probe,
+        request.probe.clone(),
         request.protocol,
         probe_options.connect_under_reset(),
         request.target_sel,
@@ -289,6 +288,7 @@ impl ComponentTreeNode {
 async fn try_show_info(
     ctx: &mut RpcContext,
     mut probe: Probe,
+    probe_entry: DebugProbeEntry,
     protocol: WireProtocol,
     connect_under_reset: bool,
     target_sel: Option<u32>,
@@ -299,6 +299,24 @@ async fn try_show_info(
         probe.attach_to_unspecified_under_reset()?;
     } else {
         probe.attach_to_unspecified()?;
+    }
+
+    if probe.protocol() == Some(ProbeRsWireProtocol::Updi) {
+        let selector: probe_rs::probe::DebugProbeSelector = probe_entry.selector().into();
+        drop(probe);
+
+        let info = query_pkobn_updi(&selector)?;
+        ctx.publish::<TargetInfoDataTopic>(
+            VarSeq::Seq2(0),
+            &InfoEvent::Message(format!("Probe: {probe_entry}")),
+        )
+        .await?;
+        for line in edbg_avr_info::format_info_lines(&info) {
+            ctx.publish::<TargetInfoDataTopic>(VarSeq::Seq2(0), &InfoEvent::Message(line))
+                .await?;
+        }
+
+        return Ok(());
     }
 
     if probe.has_arm_debug_interface() {

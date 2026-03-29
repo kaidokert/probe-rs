@@ -18,6 +18,7 @@ use crate::{
         dp::{DpAccess, DpAddress, DpRegister},
         memory::ArmMemoryInterface,
         sequences::ArmDebugSequence,
+        sequences::ArmDebugSequenceError,
     },
     probe::WireProtocol,
 };
@@ -319,6 +320,15 @@ impl ArmDebugSequence for MCX {
 
         tracing::info!("debug port start for MCX variant: {}", self.variant);
 
+        // Reject UPDI early, before any DP traffic.
+        if let Some(protocol) = interface.try_dap_probe().and_then(|f| f.active_protocol())
+            && matches!(protocol, WireProtocol::Updi)
+        {
+            return Err(ArmError::from(ArmDebugSequenceError::SequenceSpecific(
+                "UPDI is not supported by MCX ARM debug sequences".into(),
+            )));
+        }
+
         // Switch to DP Register Bank 0
         interface.write_dp_register(dp, SelectV1(0))?;
 
@@ -386,6 +396,11 @@ impl ArmDebugSequence for MCX {
                     abort.set_stkcmpclr(true);
                     abort.set_stkerrclr(true);
                     interface.write_dp_register(dp, abort)?;
+                }
+                WireProtocol::Updi => {
+                    return Err(ArmError::from(ArmDebugSequenceError::SequenceSpecific(
+                        "UPDI is not supported by MCX ARM debug sequences".into(),
+                    )));
                 }
             }
         }
