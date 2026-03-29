@@ -305,6 +305,7 @@ impl CoreExt for Core {
             }
             probe_rs_target::CoreAccessOptions::Riscv(_) => None,
             probe_rs_target::CoreAccessOptions::Xtensa(_) => None,
+            probe_rs_target::CoreAccessOptions::Avr(_) => None,
         }
     }
 }

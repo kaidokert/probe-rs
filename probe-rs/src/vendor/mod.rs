@@ -311,12 +311,13 @@ pub(crate) fn auto_determine_target(
         // descriptor. The actual UPDI memory operations go through the chip
         // descriptor directly (not Target.memory_map), but this gives downstream
         // code visibility into the available memory.
+        let core_name = "avr".to_string();
         let memory_map = vec![
             MemoryRegion::Nvm(NvmRegion {
                 name: Some("Flash".to_string()),
                 range: u64::from(chip.flash_base)
                     ..u64::from(chip.flash_base) + u64::from(chip.flash_size),
-                cores: vec![],
+                cores: vec![core_name.clone()],
                 is_alias: false,
                 access: None,
             }),
@@ -324,7 +325,7 @@ pub(crate) fn auto_determine_target(
                 name: Some("EEPROM".to_string()),
                 range: u64::from(chip.eeprom_base)
                     ..u64::from(chip.eeprom_base) + u64::from(chip.eeprom_size),
-                cores: vec![],
+                cores: vec![core_name.clone()],
                 is_alias: false,
                 access: None,
             }),
@@ -332,7 +333,13 @@ pub(crate) fn auto_determine_target(
 
         let target = Target {
             name: chip.name.to_string(),
-            cores: vec![],
+            cores: vec![probe_rs_target::Core {
+                name: "avr".to_string(),
+                core_type: probe_rs_target::CoreType::Avr,
+                core_access_options: probe_rs_target::CoreAccessOptions::Avr(
+                    probe_rs_target::AvrCoreAccessOptions {},
+                ),
+            }],
             flash_algorithms: vec![],
             memory_map,
             source: TargetDescriptionSource::Generic,

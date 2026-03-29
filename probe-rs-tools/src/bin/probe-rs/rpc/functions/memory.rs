@@ -4,54 +4,77 @@ use crate::rpc::{
 };
 use postcard_rpc::header::VarHeader;
 use postcard_schema::Schema;
-use probe_rs::{
-    MemoryInterface, Session, probe::cmsisdap::AvrMemoryRegion as ProbeRsAvrMemoryRegion,
-};
+use probe_rs::{MemoryInterface, Session};
 use serde::{Deserialize, Serialize};
 
 pub trait Word: Copy + Default + Send + Schema {
+    fn read(
+        core: &mut impl MemoryInterface,
+        address: u64,
+        out: &mut Vec<Self>,
+    ) -> anyhow::Result<()>;
+
     fn write(core: &mut impl MemoryInterface, address: u64, data: &[Self]) -> anyhow::Result<()>;
-    fn encode(words: &[Self]) -> Vec<u8>;
 }
 
 impl Word for u8 {
+    fn read(
+        core: &mut impl MemoryInterface,
+        address: u64,
+        out: &mut Vec<Self>,
+    ) -> anyhow::Result<()> {
+        core.read_8(address, out)?;
+        Ok(())
+    }
+
     fn write(core: &mut impl MemoryInterface, address: u64, data: &[Self]) -> anyhow::Result<()> {
         core.write_8(address, data)?;
         Ok(())
     }
-
-    fn encode(words: &[Self]) -> Vec<u8> {
-        words.to_vec()
-    }
 }
 impl Word for u16 {
+    fn read(
+        core: &mut impl MemoryInterface,
+        address: u64,
+        out: &mut Vec<Self>,
+    ) -> anyhow::Result<()> {
+        core.read_16(address, out)?;
+        Ok(())
+    }
+
     fn write(core: &mut impl MemoryInterface, address: u64, data: &[Self]) -> anyhow::Result<()> {
         core.write_16(address, data)?;
         Ok(())
     }
-
-    fn encode(words: &[Self]) -> Vec<u8> {
-        words.iter().flat_map(|word| word.to_le_bytes()).collect()
-    }
 }
 impl Word for u32 {
+    fn read(
+        core: &mut impl MemoryInterface,
+        address: u64,
+        out: &mut Vec<Self>,
+    ) -> anyhow::Result<()> {
+        core.read_32(address, out)?;
+        Ok(())
+    }
+
     fn write(core: &mut impl MemoryInterface, address: u64, data: &[Self]) -> anyhow::Result<()> {
         core.write_32(address, data)?;
         Ok(())
     }
-
-    fn encode(words: &[Self]) -> Vec<u8> {
-        words.iter().flat_map(|word| word.to_le_bytes()).collect()
-    }
 }
 impl Word for u64 {
-    fn write(core: &mut impl MemoryInterface, address: u64, data: &[Self]) -> anyhow::Result<()> {
-        core.write_64(address, data)?;
+    fn read(
+        core: &mut impl MemoryInterface,
+        address: u64,
+        out: &mut Vec<Self>,
+    ) -> anyhow::Result<()> {
+        core.read_64(address, out)?;
         Ok(())
     }
 
-    fn encode(words: &[Self]) -> Vec<u8> {
-        words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    fn write(core: &mut impl MemoryInterface, address: u64, data: &[Self]) -> anyhow::Result<()> {
+        core.write_64(address, data)?;
+        Ok(())
     }
 }
 
@@ -70,18 +93,9 @@ pub async fn write_memory<W: Word + 'static>(
     request: WriteMemoryRequest<W>,
 ) -> NoResponse {
     let mut session = ctx.session(request.sessid).await;
-    if session.architecture() == probe_rs::Architecture::Avr {
-        session.write_memory(
-            request.core as usize,
-            request.address,
-            std::mem::size_of::<W>(),
-            &W::encode(&request.data),
-            request.region.map(Into::into),
-        )?;
-    } else {
-        let mut core = session.core(request.core as usize)?;
-        W::write(&mut core, request.address, &request.data)?;
-    }
+    let address = avr_resolve_address(&session, request.address, request.region)?;
+    let mut core = session.core(request.core as usize)?;
+    W::write(&mut core, address, &request.data)?;
     Ok(())
 }
 
@@ -100,32 +114,15 @@ pub async fn read_memory<W: Word + 'static>(
     request: ReadMemoryRequest,
 ) -> RpcResult<Vec<W>> {
     let mut session = ctx.session(request.sessid).await;
-    let bytes = session.read_memory(
-        request.core as usize,
-        request.address,
-        std::mem::size_of::<W>(),
-        request.count as usize,
-        request.region.map(Into::into),
-    )?;
-
-    let expected_len = request.count as usize * std::mem::size_of::<W>();
-    if bytes.len() < expected_len {
-        return Err(anyhow::anyhow!(
-            "read_memory returned {} bytes, expected {}",
-            bytes.len(),
-            expected_len
-        )
-        .into());
-    }
+    let address = avr_resolve_address(&session, request.address, request.region)?;
+    let mut core = session.core(request.core as usize)?;
     let mut words = vec![W::default(); request.count as usize];
-    for (index, word) in words.iter_mut().enumerate() {
-        let start = index * std::mem::size_of::<W>();
-        let end = start + std::mem::size_of::<W>();
-        *word = read_word::<W>(&bytes[start..end])?;
-    }
+    W::read(&mut core, address, &mut words)?;
     Ok(words)
 }
 
+/// AVR UPDI memory region selector, used by the CLI `read`/`write` commands
+/// to address specific memory regions by name rather than absolute address.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Schema)]
 pub enum AvrMemoryRegion {
     Flash,
@@ -136,34 +133,32 @@ pub enum AvrMemoryRegion {
     ProdSig,
 }
 
-impl From<AvrMemoryRegion> for ProbeRsAvrMemoryRegion {
-    fn from(region: AvrMemoryRegion) -> Self {
-        match region {
-            AvrMemoryRegion::Flash => ProbeRsAvrMemoryRegion::Flash,
-            AvrMemoryRegion::Eeprom => ProbeRsAvrMemoryRegion::Eeprom,
-            AvrMemoryRegion::Fuses => ProbeRsAvrMemoryRegion::Fuses,
-            AvrMemoryRegion::Lock => ProbeRsAvrMemoryRegion::Lock,
-            AvrMemoryRegion::UserRow => ProbeRsAvrMemoryRegion::UserRow,
-            AvrMemoryRegion::ProdSig => ProbeRsAvrMemoryRegion::ProdSig,
-        }
-    }
-}
-
-fn read_word<W: Word>(bytes: &[u8]) -> anyhow::Result<W> {
-    let size = std::mem::size_of::<W>();
-    anyhow::ensure!(
-        bytes.len() >= size,
-        "expected at least {size} bytes for word read, got {}",
-        bytes.len()
-    );
-    let mut word = W::default();
-    // Safety: W is one of u8, u16, u32, u64 (the only implementors of Word).
-    // All are POD types with size == `size`, and we have verified that `bytes`
-    // contains at least `size` bytes. Copying in LE byte order is correct
-    // because from_le_bytes/to_le_bytes is the canonical encoding throughout
-    // this module.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), &mut word as *mut W as *mut u8, size);
-    }
-    Ok(word)
+/// Convert a region-relative AVR address to an absolute address.
+///
+/// For non-AVR sessions (or when no region is specified), the address is
+/// returned unchanged. When a region is specified for an AVR session,
+/// the region's base address from the chip descriptor is added to the
+/// user-supplied offset.
+fn avr_resolve_address(
+    session: &Session,
+    address: u64,
+    region: Option<AvrMemoryRegion>,
+) -> anyhow::Result<u64> {
+    let Some(region) = region else {
+        return Ok(address);
+    };
+    let chip = session
+        .avr_chip_descriptor()
+        .ok_or_else(|| anyhow::anyhow!("AVR region specified but session is not AVR"))?;
+    let base: u64 = match region {
+        // Flash region: the MemoryInterface uses 0-based flash offsets
+        // (the Avr core's address_to_region maps [0..flash_size) to Flash).
+        AvrMemoryRegion::Flash => 0,
+        AvrMemoryRegion::Eeprom => chip.eeprom_base.into(),
+        AvrMemoryRegion::Fuses => chip.fuses_base.into(),
+        AvrMemoryRegion::Lock => chip.lock_base.into(),
+        AvrMemoryRegion::UserRow => chip.userrow_base.into(),
+        AvrMemoryRegion::ProdSig => chip.signature_base.into(),
+    };
+    Ok(base + address)
 }

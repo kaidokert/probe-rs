@@ -1,4 +1,3 @@
-use crate::MemoryInterface;
 use crate::{
     Core, CoreType, Error,
     architecture::{
@@ -21,10 +20,7 @@ use crate::{
     core::{Architecture, CombinedCoreState},
     probe::{
         AttachMethod, DebugProbeError, Probe, ProbeCreationError, WireProtocol,
-        cmsisdap::{
-            AvrChipDescriptor, AvrMemoryRegion, CmsisDap, erase_attached_pkobn_updi,
-            read_attached_pkobn_updi_region, write_attached_pkobn_updi_flash,
-        },
+        cmsisdap::{AvrChipDescriptor, CmsisDap, erase_attached_pkobn_updi},
         fake_probe::FakeProbe,
         list::Lister,
     },
@@ -153,7 +149,12 @@ impl ArchitectureInterface {
                     }
                 }
             }
-            ArchitectureInterface::Avr(_, _) => Err(Error::NotImplemented("AVR core attach")),
+            ArchitectureInterface::Avr(probe, chip) => {
+                let cmsis = probe
+                    .try_into::<CmsisDap>()
+                    .ok_or(Error::NotImplemented("AVR requires a CMSIS-DAP probe"))?;
+                combined_state.attach_avr(target, cmsis, chip)
+            }
         }
     }
 }
@@ -170,23 +171,19 @@ impl Session {
         let (probe, target) = get_target_from_selector(target, attach_method, probe, registry)?;
         let architecture = target.architecture();
 
-        let cores = if architecture == Architecture::Avr {
-            Vec::new()
-        } else {
-            target
-                .cores
-                .iter()
-                .enumerate()
-                .map(|(id, core)| {
-                    Core::create_state(
-                        id,
-                        core.core_access_options.clone(),
-                        &target,
-                        core.core_type,
-                    )
-                })
-                .collect()
-        };
+        let cores = target
+            .cores
+            .iter()
+            .enumerate()
+            .map(|(id, core)| {
+                Core::create_state(
+                    id,
+                    core.core_access_options.clone(),
+                    &target,
+                    core.core_type,
+                )
+            })
+            .collect();
 
         let mut session = match architecture {
             Architecture::Arm => {
@@ -195,7 +192,7 @@ impl Session {
             Architecture::Riscv | Architecture::Xtensa => {
                 Self::attach_jtag(probe, target, attach_method, permissions, cores)?
             }
-            Architecture::Avr => Self::attach_avr_stub(probe, target, permissions.clone())?,
+            Architecture::Avr => Self::attach_avr_stub(probe, target, permissions.clone(), cores)?,
         };
 
         session.clear_all_hw_breakpoints()?;
@@ -207,6 +204,7 @@ impl Session {
         probe: Probe,
         target: Target,
         permissions: Permissions,
+        cores: Vec<CombinedCoreState>,
     ) -> Result<Self, Error> {
         use crate::probe::cmsisdap::KNOWN_AVR_CHIPS;
         let chip: &'static AvrChipDescriptor = KNOWN_AVR_CHIPS
@@ -226,7 +224,7 @@ impl Session {
         Ok(Session {
             target,
             interfaces: ArchitectureInterface::Avr(probe, chip),
-            cores: Vec::new(),
+            cores,
             configured_trace_sink: None,
             permissions,
         })
@@ -874,6 +872,14 @@ impl Session {
         &self.target
     }
 
+    /// Returns the AVR chip descriptor if this session is connected to an AVR target.
+    pub fn avr_chip_descriptor(&self) -> Option<&'static AvrChipDescriptor> {
+        match &self.interfaces {
+            ArchitectureInterface::Avr(_, chip) => Some(chip),
+            _ => None,
+        }
+    }
+
     /// Configure the target and probe for serial wire view (SWV) tracing.
     pub fn setup_tracing(
         &mut self,
@@ -971,158 +977,6 @@ impl Session {
                 Ok(())
             }
         }
-    }
-
-    /// Read raw bytes either through a debuggable core or, for AVR, from a selected narrow memory region.
-    pub fn read_memory(
-        &mut self,
-        core_index: usize,
-        address: u64,
-        width_bytes: usize,
-        count: usize,
-        region: Option<AvrMemoryRegion>,
-    ) -> Result<Vec<u8>, Error> {
-        match &mut self.interfaces {
-            ArchitectureInterface::Avr(probe, chip) => {
-                let region = region.ok_or(Error::NotImplemented("AVR region-aware memory read"))?;
-                let byte_len = count.checked_mul(width_bytes).ok_or_else(|| {
-                    Error::Other(format!(
-                        "requested read length overflowed: {count} * {width_bytes}"
-                    ))
-                })?;
-                let byte_len = u32::try_from(byte_len).map_err(|_| {
-                    Error::Other("requested read length exceeds 32-bit range".to_string())
-                })?;
-                let offset = u32::try_from(address).map_err(|_| {
-                    Error::Other("region-relative AVR address exceeds 32-bit range".to_string())
-                })?;
-                let cmsis = probe
-                    .try_into::<CmsisDap>()
-                    .ok_or(Error::NotImplemented("AVR CMSIS-DAP session read"))?;
-                read_attached_pkobn_updi_region(cmsis, chip, region, offset, byte_len)
-                    .map_err(Error::from)
-            }
-            _ => {
-                let mut core = self.core(core_index)?;
-                match width_bytes {
-                    1 => {
-                        let mut values = vec![0u8; count];
-                        core.read_8(address, &mut values)?;
-                        Ok(values)
-                    }
-                    2 => {
-                        let mut values = vec![0u16; count];
-                        core.read_16(address, &mut values)?;
-                        Ok(values.into_iter().flat_map(|v| v.to_le_bytes()).collect())
-                    }
-                    4 => {
-                        let mut values = vec![0u32; count];
-                        core.read_32(address, &mut values)?;
-                        Ok(values.into_iter().flat_map(|v| v.to_le_bytes()).collect())
-                    }
-                    8 => {
-                        let mut values = vec![0u64; count];
-                        core.read_64(address, &mut values)?;
-                        Ok(values.into_iter().flat_map(|v| v.to_le_bytes()).collect())
-                    }
-                    _ => Err(Error::Other(format!(
-                        "unsupported read width {width_bytes}"
-                    ))),
-                }
-            }
-        }
-    }
-
-    /// Write raw bytes either through a debuggable core or, for AVR, into flash via a selected
-    /// narrow programmer memory region.
-    pub fn write_memory(
-        &mut self,
-        core_index: usize,
-        address: u64,
-        width_bytes: usize,
-        data: &[u8],
-        region: Option<AvrMemoryRegion>,
-    ) -> Result<(), Error> {
-        match &mut self.interfaces {
-            ArchitectureInterface::Avr(probe, chip) => {
-                let region =
-                    region.ok_or(Error::NotImplemented("AVR region-aware memory write"))?;
-                if region != AvrMemoryRegion::Flash {
-                    return Err(Error::NotImplemented(
-                        "AVR writes currently only support flash",
-                    ));
-                }
-                let offset = u32::try_from(address).map_err(|_| {
-                    Error::Other("region-relative AVR address exceeds 32-bit range".to_string())
-                })?;
-                let cmsis = probe
-                    .try_into::<CmsisDap>()
-                    .ok_or(Error::NotImplemented("AVR CMSIS-DAP session write"))?;
-                write_attached_pkobn_updi_flash(cmsis, chip, offset, data).map_err(Error::from)
-            }
-            _ => {
-                let mut core = self.core(core_index)?;
-                match width_bytes {
-                    1 => core.write_8(address, data),
-                    2 => {
-                        let words = Self::decode_words_u16(data)?;
-                        core.write_16(address, &words)
-                    }
-                    4 => {
-                        let words = Self::decode_words_u32(data)?;
-                        core.write_32(address, &words)
-                    }
-                    8 => {
-                        let words = Self::decode_words_u64(data)?;
-                        core.write_64(address, &words)
-                    }
-                    other => Err(Error::Other(format!("unsupported write width {other}"))),
-                }
-            }
-        }
-    }
-
-    fn decode_words_u16(bytes: &[u8]) -> Result<Vec<u16>, Error> {
-        if !bytes.len().is_multiple_of(2) {
-            return Err(Error::Other(format!(
-                "write data length ({} bytes) is not aligned to 16-bit width",
-                bytes.len()
-            )));
-        }
-        Ok(bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect())
-    }
-
-    fn decode_words_u32(bytes: &[u8]) -> Result<Vec<u32>, Error> {
-        if !bytes.len().is_multiple_of(4) {
-            return Err(Error::Other(format!(
-                "write data length ({} bytes) is not aligned to 32-bit width",
-                bytes.len()
-            )));
-        }
-        Ok(bytes
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect())
-    }
-
-    fn decode_words_u64(bytes: &[u8]) -> Result<Vec<u64>, Error> {
-        if !bytes.len().is_multiple_of(8) {
-            return Err(Error::Other(format!(
-                "write data length ({} bytes) is not aligned to 64-bit width",
-                bytes.len()
-            )));
-        }
-        Ok(bytes
-            .chunks_exact(8)
-            .map(|chunk| {
-                u64::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-                ])
-            })
-            .collect())
     }
 
     /// Clears all hardware breakpoints on all cores

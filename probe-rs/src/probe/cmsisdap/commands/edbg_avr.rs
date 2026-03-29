@@ -388,7 +388,7 @@ pub fn read_attached_pkobn_updi_region(
 ) -> Result<Vec<u8>, DebugProbeError> {
     let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, chip);
     let result = (|| {
-        let _ = transport.enter_programming_session()?;
+        let _ = transport.auto_detect_and_enter()?;
         transport.read_region(region, offset, length)
     })();
 
