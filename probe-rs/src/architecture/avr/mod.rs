@@ -446,7 +446,13 @@ impl CoreInterface for Avr<'_> {
         let halted = debug_avr_status(self.probe, self.chip, &mut self.state.debug_state)
             .map_err(Error::Probe)?;
         if halted {
-            Ok(CoreStatus::Halted(crate::HaltReason::Request))
+            // Check if we stopped at a breakpoint address
+            let reason = if self.state.debug_state.hw_breakpoint.is_some() {
+                crate::HaltReason::Breakpoint(crate::BreakpointCause::Hardware)
+            } else {
+                crate::HaltReason::Request
+            };
+            Ok(CoreStatus::Halted(reason))
         } else {
             Ok(CoreStatus::Running)
         }
@@ -566,6 +572,10 @@ impl CoreInterface for Avr<'_> {
                 unit_index
             )));
         }
+        // Clear the EDBG-side breakpoint but keep hw_breakpoint address
+        // so run() can re-use it with run_to_address.
+        // GDB removes/re-inserts breakpoints around each continue cycle.
+        // Setting hw_breakpoint to None here would lose the address for run_to_address.
         debug_avr_hw_break_clear(
             self.probe,
             self.chip,

@@ -99,7 +99,7 @@ pub fn run<'a>(
         return Ok(());
     }
 
-    tracing::debug!("[gdb] Entering accept loop with {} targets", targets.len());
+    eprintln!("[gdb] Entering accept loop with {} targets", targets.len());
     // Process every target in a loop
     loop {
         // Check if the gdb we spawned has exited and if so exit outself.

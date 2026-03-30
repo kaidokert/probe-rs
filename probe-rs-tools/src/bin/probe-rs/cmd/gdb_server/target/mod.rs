@@ -75,7 +75,7 @@ impl<'a> RuntimeTarget<'a> {
     ) -> Result<Self, anyhow::Error> {
         let listener = TcpListener::bind(addrs)?;
         listener.set_nonblocking(true)?;
-        tracing::debug!("[gdb] Listener bound to {:?}", listener.local_addr());
+        eprintln!("[gdb] Listener bound to {:?}", listener.local_addr());
 
         Ok(Self {
             session,
@@ -189,6 +189,7 @@ impl<'a> RuntimeTarget<'a> {
         };
 
         if let Some(b) = next_byte {
+            tracing::debug!("[gdb] handle_running: received byte 0x{b:02x}");
             return Ok(Some(state.incoming_data(self, b)?));
         }
 
@@ -239,6 +240,7 @@ impl<'a> RuntimeTarget<'a> {
         &mut self,
         state: GdbStubStateMachineInner<'b, state::CtrlCInterrupt, Self, TcpStream>,
     ) -> Result<Option<GdbStubStateMachine<'b, Self, TcpStream>>, anyhow::Error> {
+        tracing::debug!("[gdb] handle_ctrl_c: halting all cores");
         self.halt_all_cores()?;
         let next_state =
             state.interrupt_handled(self, Some(MultiThreadStopReason::Signal(Signal::SIGINT)))?;

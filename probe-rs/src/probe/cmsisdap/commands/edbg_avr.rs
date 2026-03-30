@@ -38,12 +38,19 @@ const CMD3_WRITE_MEMORY: u8 = 0x23;
 const CMD3_RESET: u8 = 0x30;
 const CMD3_STOP: u8 = 0x31;
 const CMD3_RUN: u8 = 0x32;
+const CMD3_RUN_TO: u8 = 0x33;
 const CMD3_STEP: u8 = 0x34;
 const CMD3_READ_PC: u8 = 0x35;
 #[allow(dead_code)]
 const CMD3_WRITE_PC: u8 = 0x36;
+#[allow(dead_code)]
 const CMD3_HW_BREAK_SET: u8 = 0x40;
+#[allow(dead_code)]
 const CMD3_HW_BREAK_CLEAR: u8 = 0x41;
+const CMD3_SW_BREAK_SET: u8 = 0x43;
+#[allow(dead_code)]
+const CMD3_SW_BREAK_CLEAR: u8 = 0x44;
+const CMD3_SW_BREAK_CLEAR_ALL: u8 = 0x45;
 
 const CMD3_INFO_SERIAL: u8 = 0x81;
 
@@ -58,6 +65,7 @@ const XMEGA_ERASE_APP_PAGE: u8 = 0x04;
 
 const MTYPE_EEPROM: u8 = 0x22;
 const MTYPE_REGFILE: u8 = 0xB8;
+#[allow(dead_code)]
 const MTYPE_SPM: u8 = 0xA0;
 const MTYPE_OCD: u8 = 0xD1;
 const MTYPE_FLASH_PAGE: u8 = 0xb0;
@@ -93,6 +101,7 @@ const SCOPE_TEST: u8 = 0x80;
 const PARM_TARGET_RUNNING: u8 = 0x00;
 
 // Breakpoint type
+#[allow(dead_code)]
 const BP_TYPE_PROGRAM: u8 = 0x01;
 
 const DEFAULT_MINIMUM_CHARACTERISED_DIV1_VOLTAGE_MV: u16 = 4500;
@@ -1251,7 +1260,16 @@ impl<'a> EdbgAvrTransport<'a> {
     }
 
     fn run_target(&mut self) -> Result<(), EdbgAvrError> {
+        tracing::debug!("EDBG AVR: run_target");
         self.command(&[SCOPE_AVR, CMD3_RUN, 0], "run")?;
+        Ok(())
+    }
+
+    fn run_to_address(&mut self, word_addr: u32) -> Result<(), EdbgAvrError> {
+        tracing::debug!("EDBG AVR: run_to word_addr=0x{word_addr:04x}");
+        let mut cmd = vec![SCOPE_AVR, CMD3_RUN_TO, 0];
+        cmd.extend_from_slice(&word_addr.to_le_bytes());
+        self.command(&cmd, "run to address")?;
         Ok(())
     }
 
@@ -1300,7 +1318,9 @@ impl<'a> EdbgAvrTransport<'a> {
             });
         }
         // 0 = halted, nonzero = running
-        Ok(result[0] == 0)
+        let halted = result[0] == 0;
+        tracing::trace!("EDBG AVR: target_status raw=0x{:02x} halted={halted}", result[0]);
+        Ok(halted)
     }
 
     fn reset_target(&mut self) -> Result<(), EdbgAvrError> {
@@ -1308,22 +1328,22 @@ impl<'a> EdbgAvrTransport<'a> {
         Ok(())
     }
 
-    fn hw_break_set(&mut self, bp_index: u8, address: u32) -> Result<(), EdbgAvrError> {
-        // Address is byte address, firmware expects word address
+    fn hw_break_set(&mut self, _bp_index: u8, address: u32) -> Result<(), EdbgAvrError> {
+        // Use software breakpoints via CMD_AVR8_SW_BREAK_SET (0x43).
+        // CMD3_HW_BREAK_SET (0x40) returns ILLEGAL_BREAKPOINT on nEDBG/UPDI targets.
+        // Address is byte address from GDB; EDBG expects word address.
         let word_addr = address / 2;
-        let mut cmd = vec![SCOPE_AVR, CMD3_HW_BREAK_SET, 0];
-        cmd.push(bp_index + 1); // 1-based index
-        cmd.push(BP_TYPE_PROGRAM);
+        tracing::debug!("sw_break_set: byte_addr=0x{address:04x} word_addr=0x{word_addr:04x}");
+        let mut cmd = vec![SCOPE_AVR, CMD3_SW_BREAK_SET, 0];
         cmd.extend_from_slice(&word_addr.to_le_bytes());
-        self.command(&cmd, "hw break set")?;
+        self.command(&cmd, "sw break set")?;
         Ok(())
     }
 
-    fn hw_break_clear(&mut self, bp_index: u8) -> Result<(), EdbgAvrError> {
-        self.command(
-            &[SCOPE_AVR, CMD3_HW_BREAK_CLEAR, 0, bp_index + 1],
-            "hw break clear",
-        )?;
+    fn hw_break_clear(&mut self, _bp_index: u8) -> Result<(), EdbgAvrError> {
+        // Clear all software breakpoints
+        tracing::debug!("sw_break_clear_all");
+        self.command(&[SCOPE_AVR, CMD3_SW_BREAK_CLEAR_ALL, 0], "sw break clear all")?;
         Ok(())
     }
 
@@ -1463,6 +1483,26 @@ impl<'a> EdbgAvrTransport<'a> {
         Ok(payload[..expected_len].to_vec())
     }
 
+    #[allow(dead_code)]
+    fn write_memory(
+        &mut self,
+        memory_type: u8,
+        address: u32,
+        data: &[u8],
+    ) -> Result<(), EdbgAvrError> {
+        tracing::trace!(
+            "EDBG AVR: write_memory type=0x{memory_type:02x} addr=0x{address:04x} len={}",
+            data.len()
+        );
+        let mut command = Vec::with_capacity(12 + data.len());
+        command.extend_from_slice(&[SCOPE_AVR, CMD3_WRITE_MEMORY, 0, memory_type]);
+        command.extend_from_slice(&address.to_le_bytes());
+        command.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        command.extend_from_slice(data);
+        self.command(&command, "write memory")?;
+        Ok(())
+    }
+
     fn command(&mut self, payload: &[u8], context: &'static str) -> Result<Vec<u8>, EdbgAvrError> {
         self.send_payload(payload)?;
         let response = self.receive_payload()?;
@@ -1475,6 +1515,7 @@ impl<'a> EdbgAvrTransport<'a> {
 
         if response[1] & RSP3_STATUS_MASK != RSP3_OK {
             let code = response.get(3).copied().unwrap_or(0);
+            tracing::warn!("EDBG command '{}' failed: response={:02x?} code=0x{:02x}", context, response, code);
             return Err(EdbgAvrError::CommandFailed { context, code });
         }
 
@@ -1768,7 +1809,18 @@ pub fn debug_avr_run(
     ensure_debug_session(probe, chip, state)?;
     let mut transport =
         EdbgAvrTransport::from_attached_device_with_debug_state(&mut probe.device, chip, state);
-    transport.run_target()?;
+    if let Some(bp_addr) = state.hw_breakpoint {
+        // Use run_to_address for breakpoint support on UPDI/nEDBG targets.
+        // Step past current PC first if we're sitting on the breakpoint.
+        let word_addr = (bp_addr / 2) as u32;
+        let pc = transport.read_pc()?;
+        if pc == bp_addr as u32 {
+            transport.step_target()?;
+        }
+        transport.run_to_address(word_addr)?;
+    } else {
+        transport.run_target()?;
+    }
     transport.save_debug_state(state);
     Ok(())
 }
