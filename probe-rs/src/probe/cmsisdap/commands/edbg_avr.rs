@@ -1274,9 +1274,20 @@ impl<'a> EdbgAvrTransport<'a> {
                 ),
             });
         }
-        let word_addr = u32::from_le_bytes([response[2], response[3], response[4], response[5]]);
-        // Convert word address to byte address (AVR PC is in words)
-        Ok(word_addr * 2)
+        tracing::trace!("EDBG read_pc: full response={:02x?}", &response);
+        // Response: [0]=scope, [1]=RSP3_PC, [2]=padding, [3..7]=PC LE
+        // Use bytes [3..7] for the actual PC value
+        if response.len() < 7 {
+            return Err(EdbgAvrError::UnexpectedResponse {
+                context: "read PC",
+                details: format!("response too short for PC: {} bytes: {:02x?}", response.len(), response),
+            });
+        }
+        let word_addr = u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
+        let byte_addr = word_addr * 2;
+        tracing::trace!("EDBG read_pc: word_addr=0x{word_addr:04x} byte_addr=0x{byte_addr:04x}");
+        // GDB AVR stores PC as byte address internally, divides by 2 for display
+        Ok(byte_addr)
     }
 
     fn target_status(&mut self) -> Result<bool, EdbgAvrError> {
@@ -1937,8 +1948,8 @@ pub fn debug_avr_cleanup(
 
 /// Memory type constant for SRAM access in debug mode.
 pub const DEBUG_MTYPE_SRAM: u8 = MTYPE_SRAM;
-/// Memory type constant for flash access in debug mode (SPM).
-pub const DEBUG_MTYPE_FLASH: u8 = MTYPE_SPM;
+/// Memory type constant for flash access in debug mode.
+pub const DEBUG_MTYPE_FLASH: u8 = MTYPE_FLASH;
 /// Memory type constant for EEPROM access in debug mode.
 pub const DEBUG_MTYPE_EEPROM: u8 = MTYPE_EEPROM;
 

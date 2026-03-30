@@ -106,13 +106,16 @@ avr_gpr!(AVR_R29, 29, "R29");
 avr_gpr!(AVR_R30, 30, "R30");
 avr_gpr!(AVR_R31, 31, "R31");
 
-static AVR_PC: CoreRegister = CoreRegister {
+// GDB AVR register numbering: r0-r31=0-31, SREG=32, SP=33, PC=34
+// This order MUST match GDB's built-in avr-tdep.c layout since GDB ignores
+// target-supplied register descriptions for AVR architecture.
+static AVR_SREG: CoreRegister = CoreRegister {
     roles: &[
-        crate::RegisterRole::Core("PC"),
-        crate::RegisterRole::ProgramCounter,
+        crate::RegisterRole::Core("SREG"),
+        crate::RegisterRole::ProcessorStatus,
     ],
     id: RegisterId(32),
-    data_type: crate::RegisterDataType::UnsignedInteger(32),
+    data_type: crate::RegisterDataType::UnsignedInteger(8),
     unwind_rule: UnwindRule::SpecialRule,
 };
 
@@ -126,13 +129,13 @@ static AVR_SP: CoreRegister = CoreRegister {
     unwind_rule: UnwindRule::SpecialRule,
 };
 
-static AVR_SREG: CoreRegister = CoreRegister {
+static AVR_PC: CoreRegister = CoreRegister {
     roles: &[
-        crate::RegisterRole::Core("SREG"),
-        crate::RegisterRole::ProcessorStatus,
+        crate::RegisterRole::Core("PC"),
+        crate::RegisterRole::ProgramCounter,
     ],
     id: RegisterId(34),
-    data_type: crate::RegisterDataType::UnsignedInteger(8),
+    data_type: crate::RegisterDataType::UnsignedInteger(32),
     unwind_rule: UnwindRule::SpecialRule,
 };
 
@@ -154,7 +157,7 @@ pub static AVR_CORE_REGISTERS: LazyLock<CoreRegisters> = LazyLock::new(|| {
         &AVR_R0, &AVR_R1, &AVR_R2, &AVR_R3, &AVR_R4, &AVR_R5, &AVR_R6, &AVR_R7, &AVR_R8, &AVR_R9,
         &AVR_R10, &AVR_R11, &AVR_R12, &AVR_R13, &AVR_R14, &AVR_R15, &AVR_R16, &AVR_R17, &AVR_R18,
         &AVR_R19, &AVR_R20, &AVR_R21, &AVR_R22, &AVR_R23, &AVR_R24, &AVR_R25, &AVR_R26, &AVR_R27,
-        &AVR_R28, &AVR_R29, &AVR_R30, &AVR_R31, &AVR_PC, &AVR_SP, &AVR_SREG,
+        &AVR_R28, &AVR_R29, &AVR_R30, &AVR_R31, &AVR_SREG, &AVR_SP, &AVR_PC,
     ])
 });
 
@@ -237,21 +240,37 @@ impl<'probe> Avr<'probe> {
         })?;
         let chip = self.chip;
 
-        // Flash (0-based or data-space mapped)
+        // GDB AVR address spaces:
+        //   0x000000..          -> Program memory (flash), byte-addressed
+        //   0x800000..0x80FFFF  -> Data memory (SRAM/IO/peripherals)
+        // Strip the 0x800000 GDB data-space offset if present.
+        const GDB_AVR_DATA_OFFSET: u32 = 0x800000;
+
+        if addr >= GDB_AVR_DATA_OFFSET {
+            let data_addr = addr - GDB_AVR_DATA_OFFSET;
+            // Map through the data-space: SRAM, IO, peripherals, memory-mapped flash
+            if chip.flash_base > 0
+                && data_addr >= chip.flash_base
+                && data_addr < chip.flash_base + chip.flash_size
+            {
+                return Ok((DEBUG_MTYPE_FLASH, data_addr - chip.flash_base));
+            }
+            if data_addr >= chip.eeprom_base
+                && data_addr < chip.eeprom_base + chip.eeprom_size
+            {
+                return Ok((DEBUG_MTYPE_EEPROM, data_addr));
+            }
+            return Ok((DEBUG_MTYPE_SRAM, data_addr));
+        }
+
+        // Program-space address (flash), byte-addressed.
+        // Flash is memory-mapped in the data space at flash_base, so read it
+        // via SRAM memtype at the data-space address.
         if addr < chip.flash_size {
-            return Ok((DEBUG_MTYPE_FLASH, addr));
+            return Ok((DEBUG_MTYPE_SRAM, chip.flash_base + addr));
         }
-        if chip.flash_base > 0
-            && addr >= chip.flash_base
-            && addr < chip.flash_base + chip.flash_size
-        {
-            return Ok((DEBUG_MTYPE_FLASH, addr - chip.flash_base));
-        }
-        // EEPROM
-        if addr >= chip.eeprom_base && addr < chip.eeprom_base + chip.eeprom_size {
-            return Ok((DEBUG_MTYPE_EEPROM, addr));
-        }
-        // Everything else in the data space (SRAM, IO, peripherals)
+
+        // Fallback: treat as data space
         Ok((DEBUG_MTYPE_SRAM, addr))
     }
 }
@@ -297,19 +316,27 @@ impl MemoryInterface for Avr<'_> {
         if data.is_empty() {
             return Ok(());
         }
+        tracing::trace!("AVR read_8: addr=0x{address:08x} len={} debug_mode={}", data.len(), self.state.debug_state.in_debug_mode);
         if self.state.debug_state.in_debug_mode {
             // In debug mode, use the debug transport directly
             let (memtype, addr) = self.debug_address_to_memtype(address)?;
+            tracing::trace!("AVR read_8: memtype=0x{memtype:02x} mapped_addr=0x{addr:04x}");
             let length = u32::try_from(data.len())
                 .map_err(|_| Error::Other("AVR read length exceeds 32-bit range".to_string()))?;
-            let bytes = debug_avr_read_memory(
+            let bytes = match debug_avr_read_memory(
                 self.probe,
                 self.chip,
                 &mut self.state.debug_state,
                 memtype,
                 addr,
                 length,
-            )?;
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::debug!("AVR read_8: EDBG read failed: {e}");
+                    return Err(e.into());
+                }
+            };
             if bytes.len() < data.len() {
                 return Err(Error::Other(format!(
                     "AVR debug read returned {} bytes, expected {}",
@@ -469,22 +496,22 @@ impl CoreInterface for Avr<'_> {
                 Ok(RegisterValue::U32(regs[id as usize] as u32))
             }
             32 => {
-                // PC
-                let pc = debug_avr_read_pc(self.probe, self.chip, &mut self.state.debug_state)
+                // SREG (GDB register 32)
+                let sreg = debug_avr_read_sreg(self.probe, self.chip, &mut self.state.debug_state)
                     .map_err(Error::Probe)?;
-                Ok(RegisterValue::U32(pc))
+                Ok(RegisterValue::U32(sreg as u32))
             }
             33 => {
-                // SP
+                // SP (GDB register 33)
                 let sp = debug_avr_read_sp(self.probe, self.chip, &mut self.state.debug_state)
                     .map_err(Error::Probe)?;
                 Ok(RegisterValue::U32(sp as u32))
             }
             34 => {
-                // SREG
-                let sreg = debug_avr_read_sreg(self.probe, self.chip, &mut self.state.debug_state)
+                // PC (GDB register 34)
+                let pc = debug_avr_read_pc(self.probe, self.chip, &mut self.state.debug_state)
                     .map_err(Error::Probe)?;
-                Ok(RegisterValue::U32(sreg as u32))
+                Ok(RegisterValue::U32(pc))
             }
             _ => Err(Error::Other(format!("AVR: unknown register id {}", id))),
         }

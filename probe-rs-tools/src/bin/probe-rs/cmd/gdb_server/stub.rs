@@ -10,7 +10,7 @@ use itertools::Itertools;
 
 use super::target;
 
-const CONNECTION_STRING: &str = "127.0.0.1:1337";
+const CONNECTION_STRING: &str = "192.168.5.222:8081";
 
 /// Configuration for a single GDB endpoint
 pub struct GdbInstanceConfiguration {
@@ -99,6 +99,7 @@ pub fn run<'a>(
         return Ok(());
     }
 
+    tracing::debug!("[gdb] Entering accept loop with {} targets", targets.len());
     // Process every target in a loop
     loop {
         // Check if the gdb we spawned has exited and if so exit outself.

@@ -86,7 +86,7 @@ impl Cmd {
                 cmd.arg("--symbols").arg(path);
             }
             cmd.args(self.gdb_args);
-            eprintln!("Spawning {cmd:?}");
+            tracing::debug!("Spawning {cmd:?}");
             Some(cmd.spawn()?)
         } else {
             None

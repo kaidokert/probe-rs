@@ -1,0 +1,68 @@
+name: AVR
+variants:
+- name: ATmega4809
+  cores:
+  - name: main
+    type: avr
+    core_access_options: !Avr {}
+  memory_map:
+  # GDB AVR address spaces: program=0x0.., data=0x800000..
+  # ATmega4809: 48KB flash, SRAM at data-space 0x3C00-0x3FFF
+  - !Nvm
+    range:
+      start: 0x0
+      end: 0xC000
+    cores:
+    - main
+    access:
+      boot: true
+  - !Ram
+    range:
+      start: 0x803C00
+      end: 0x804000
+    cores:
+    - main
+  flash_algorithms: []
+- name: AVR128DB48
+  cores:
+  - name: main
+    type: avr
+    core_access_options: !Avr {}
+  memory_map:
+  - !Nvm
+    range:
+      start: 0x800000
+      end: 0x820000
+    cores:
+    - main
+    access:
+      boot: true
+  - !Ram
+    range:
+      start: 0x6000
+      end: 0xA000
+    cores:
+    - main
+  flash_algorithms: []
+- name: AVR64EA48
+  cores:
+  - name: main
+    type: avr
+    core_access_options: !Avr {}
+  memory_map:
+  - !Nvm
+    range:
+      start: 0x800000
+      end: 0x810000
+    cores:
+    - main
+    access:
+      boot: true
+  - !Ram
+    range:
+      start: 0x6000
+      end: 0x8000
+    cores:
+    - main
+  flash_algorithms: []
+flash_algorithms: []
