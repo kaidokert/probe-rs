@@ -220,6 +220,8 @@ impl TargetDescription {
 
 fn size_to_type(size: usize) -> &'static str {
     match size {
+        8 => "uint8",
+        16 => "uint16",
         32 => "uint32",
         64 => "uint64",
         128 => "uint128",

@@ -583,7 +583,7 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn instruction_set(&mut self) -> Result<crate::InstructionSet, Error> {
-        Err(Error::NotImplemented("AVR: instruction set query"))
+        Ok(crate::InstructionSet::Avr)
     }
 
     fn fpu_support(&mut self) -> Result<bool, Error> {
