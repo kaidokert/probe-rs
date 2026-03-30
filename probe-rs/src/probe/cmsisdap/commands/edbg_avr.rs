@@ -1298,7 +1298,11 @@ impl<'a> EdbgAvrTransport<'a> {
         if response.len() < 7 {
             return Err(EdbgAvrError::UnexpectedResponse {
                 context: "read PC",
-                details: format!("response too short for PC: {} bytes: {:02x?}", response.len(), response),
+                details: format!(
+                    "response too short for PC: {} bytes: {:02x?}",
+                    response.len(),
+                    response
+                ),
             });
         }
         let word_addr = u32::from_le_bytes([response[3], response[4], response[5], response[6]]);
@@ -1319,7 +1323,10 @@ impl<'a> EdbgAvrTransport<'a> {
         }
         // 0 = halted, nonzero = running
         let halted = result[0] == 0;
-        tracing::trace!("EDBG AVR: target_status raw=0x{:02x} halted={halted}", result[0]);
+        tracing::trace!(
+            "EDBG AVR: target_status raw=0x{:02x} halted={halted}",
+            result[0]
+        );
         Ok(halted)
     }
 
@@ -1343,7 +1350,10 @@ impl<'a> EdbgAvrTransport<'a> {
     fn hw_break_clear(&mut self, _bp_index: u8) -> Result<(), EdbgAvrError> {
         // Clear all software breakpoints
         tracing::debug!("sw_break_clear_all");
-        self.command(&[SCOPE_AVR, CMD3_SW_BREAK_CLEAR_ALL, 0], "sw break clear all")?;
+        self.command(
+            &[SCOPE_AVR, CMD3_SW_BREAK_CLEAR_ALL, 0],
+            "sw break clear all",
+        )?;
         Ok(())
     }
 
@@ -1515,7 +1525,12 @@ impl<'a> EdbgAvrTransport<'a> {
 
         if response[1] & RSP3_STATUS_MASK != RSP3_OK {
             let code = response.get(3).copied().unwrap_or(0);
-            tracing::warn!("EDBG command '{}' failed: response={:02x?} code=0x{:02x}", context, response, code);
+            tracing::warn!(
+                "EDBG command '{}' failed: response={:02x?} code=0x{:02x}",
+                context,
+                response,
+                code
+            );
             return Err(EdbgAvrError::CommandFailed { context, code });
         }
 

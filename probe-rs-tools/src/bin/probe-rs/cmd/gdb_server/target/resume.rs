@@ -1,7 +1,10 @@
 use super::{ResumeAction, RuntimeTarget};
 
 use gdbstub::target::ext::base::multithread::MultiThreadSingleStepOps;
-use gdbstub::target::ext::base::multithread::{MultiThreadResume, MultiThreadSchedulerLocking, MultiThreadSchedulerLockingOps, MultiThreadSingleStep};
+use gdbstub::target::ext::base::multithread::{
+    MultiThreadResume, MultiThreadSchedulerLocking, MultiThreadSchedulerLockingOps,
+    MultiThreadSingleStep,
+};
 
 impl MultiThreadResume for RuntimeTarget<'_> {
     fn resume(&mut self) -> Result<(), Self::Error> {

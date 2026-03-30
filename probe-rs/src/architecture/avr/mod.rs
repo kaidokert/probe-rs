@@ -255,9 +255,7 @@ impl<'probe> Avr<'probe> {
             {
                 return Ok((DEBUG_MTYPE_FLASH, data_addr - chip.flash_base));
             }
-            if data_addr >= chip.eeprom_base
-                && data_addr < chip.eeprom_base + chip.eeprom_size
-            {
+            if data_addr >= chip.eeprom_base && data_addr < chip.eeprom_base + chip.eeprom_size {
                 return Ok((DEBUG_MTYPE_EEPROM, data_addr));
             }
             return Ok((DEBUG_MTYPE_SRAM, data_addr));
@@ -316,7 +314,11 @@ impl MemoryInterface for Avr<'_> {
         if data.is_empty() {
             return Ok(());
         }
-        tracing::trace!("AVR read_8: addr=0x{address:08x} len={} debug_mode={}", data.len(), self.state.debug_state.in_debug_mode);
+        tracing::trace!(
+            "AVR read_8: addr=0x{address:08x} len={} debug_mode={}",
+            data.len(),
+            self.state.debug_state.in_debug_mode
+        );
         if self.state.debug_state.in_debug_mode {
             // In debug mode, use the debug transport directly
             let (memtype, addr) = self.debug_address_to_memtype(address)?;
