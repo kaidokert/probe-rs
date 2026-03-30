@@ -56,13 +56,9 @@ impl Cmd {
                 .reset_and_halt(Duration::from_millis(100))?;
         }
 
-        let gdb_connection_string = self
-            .gdb_connection_string
-            .unwrap_or_else(|| "localhost:1337".to_string());
-
         let instances = crate::cmd::gdb_server::GdbInstanceConfiguration::from_session(
             &session,
-            Some(gdb_connection_string),
+            self.gdb_connection_string,
         );
 
         for instance in instances.iter() {
