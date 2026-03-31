@@ -86,10 +86,6 @@ impl MultiThreadBase for RuntimeTarget<'_> {
         data: &mut [u8],
         tid: Tid,
     ) -> TargetResult<usize, Self> {
-        tracing::trace!(
-            "[gdb] read_addrs: addr=0x{start_addr:08x} len={}",
-            data.len()
-        );
         if start_addr.checked_add(data.len() as u64).is_none() {
             // Workaround for a GDB bug: it may send "$mfffffffffffffffc,4#2a".
             // Detect address+length overflow and report EFAULT (14) to GDB.

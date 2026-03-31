@@ -32,7 +32,6 @@ use probe_rs_target::ScanChainElement;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cmd::edbg_avr_info,
     rpc::functions::{
         NoResponse, RpcContext, TargetInfoDataTopic,
         chip::JEP106Code,
@@ -338,7 +337,7 @@ async fn try_show_info(
             &InfoEvent::Message(format!("Probe: {probe_name}")),
         )
         .await?;
-        for line in edbg_avr_info::format_info_lines(&info) {
+        for line in info.format_info_lines() {
             ctx.publish::<TargetInfoDataTopic>(VarSeq::Seq2(0), &InfoEvent::Message(line))
                 .await?;
         }

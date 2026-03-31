@@ -244,8 +244,11 @@ pub struct XtensaCoreAccessOptions {
 
 /// The data required to access an AVR core via UPDI.
 ///
-/// These fields describe the chip's memory layout, NVM controller addresses,
-/// and OCD configuration. They are loaded from the target YAML file.
+/// Contains the full UPDI device descriptor: memory layout (flash, EEPROM, fuses,
+/// etc.), NVM controller and OCD register base addresses, device signature for
+/// auto-detection, and EDBG transport parameters (address mode, HVUPDI variant).
+/// These fields are loaded from the target YAML file and replace the previously
+/// hardcoded `AvrChipDescriptor` constants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvrCoreAccessOptions {
     /// Three-byte device signature read from production signature row.

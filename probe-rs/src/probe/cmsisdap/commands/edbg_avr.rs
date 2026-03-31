@@ -342,6 +342,88 @@ pub struct PkobnUpdiInfo {
     pub chip: Option<&'static AvrChipDescriptor>,
 }
 
+impl PkobnUpdiInfo {
+    /// Format the probe/chip info as human-readable lines.
+    pub fn format_info_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some(vendor) = &self.cmsis_dap_vendor {
+            lines.push(format!("CMSIS-DAP vendor: {vendor}"));
+        }
+        if let Some(product) = &self.cmsis_dap_product {
+            lines.push(format!("CMSIS-DAP product: {product}"));
+        }
+        if let Some(serial) = &self.cmsis_dap_serial {
+            lines.push(format!("CMSIS-DAP serial: {serial}"));
+        }
+        if let Some(firmware) = &self.cmsis_dap_firmware_version {
+            lines.push(format!("CMSIS-DAP firmware: {firmware}"));
+        }
+        lines.push(format!(
+            "CMSIS-DAP packet size: {} bytes",
+            self.cmsis_dap_packet_size
+        ));
+        lines.push(format!("Probe selector: {}", self.probe_selector));
+        if let Some(serial) = &self.ice_serial {
+            lines.push(format!("EDBG serial: {serial}"));
+        }
+        lines.push(format!(
+            "EDBG firmware: HW {} FW {}.{} (rel. {})",
+            self.ice_firmware_version.hardware,
+            self.ice_firmware_version.major,
+            self.ice_firmware_version.minor,
+            self.ice_firmware_version.release
+        ));
+        lines.push(format!(
+            "Target voltage: {:.2} V",
+            f32::from(self.target_voltage_mv) / 1000.0
+        ));
+        lines.push(format!("UPDI clock: {} kHz", self.updi_clock_khz));
+        if let Some(family_id) = &self.partial_family_id {
+            lines.push(format!("Partial family ID: {family_id}"));
+        }
+        lines.push(format!("SIB: {}", self.sib_string));
+        lines.push(format!(
+            "Chip revision: {}.{}",
+            self.chip_revision >> 4,
+            self.chip_revision & 0x0f
+        ));
+        lines.push(format!(
+            "Signature: {:02x} {:02x} {:02x}",
+            self.signature[0], self.signature[1], self.signature[2]
+        ));
+        lines.push(format!(
+            "Lock bytes: {}",
+            self.lock_bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+        ));
+        lines.push(format!(
+            "Fuses: {}",
+            self.fuses.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+        ));
+        // USERROW hex dump
+        lines.push("USERROW:".to_string());
+        for (offset, chunk) in self.userrow.chunks(16).enumerate() {
+            lines.push(format!(
+                "  {:04x}: {}",
+                offset * 16,
+                chunk.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+            ));
+        }
+        // PRODSIG hex dump
+        lines.push("PRODSIG:".to_string());
+        for (offset, chunk) in self.prodsig.chunks(16).enumerate() {
+            lines.push(format!(
+                "  {:04x}: {}",
+                offset * 16,
+                chunk.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+            ));
+        }
+        if let Some(chip) = self.chip {
+            lines.push(format!("Detected part: {}", chip.name));
+        }
+        lines
+    }
+}
+
 /// Memory region within the narrow AVR UPDI implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvrMemoryRegion {

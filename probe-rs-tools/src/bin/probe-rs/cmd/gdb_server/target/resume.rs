@@ -8,7 +8,6 @@ use gdbstub::target::ext::base::multithread::{
 
 impl MultiThreadResume for RuntimeTarget<'_> {
     fn resume(&mut self) -> Result<(), Self::Error> {
-        tracing::debug!("[gdb] resume: action={:?}", self.resume_action);
         let mut session = self.session.lock();
 
         match self.resume_action {

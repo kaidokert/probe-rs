@@ -359,6 +359,8 @@ impl Registry {
             }
             ChipInfo::Avr(avr_info) => {
                 // Search all families for a chip whose AvrCoreAccessOptions.signature matches.
+                let mut identified_chips = Vec::new();
+
                 for family in &self.families {
                     for chip in family.variants() {
                         if let Some(core) = chip.cores.first() {
@@ -366,17 +368,23 @@ impl Registry {
                                 &core.core_access_options
                             {
                                 if opts.signature == avr_info.signature {
-                                    return Ok(self.get_target(family, chip));
+                                    identified_chips.push((family, chip));
                                 }
                             }
                         }
                     }
                 }
-                tracing::debug!(
-                    "No AVR chip found matching signature {:02x?}",
-                    avr_info.signature
-                );
-                return Err(RegistryError::ChipAutodetectFailed);
+
+                if identified_chips.len() != 1 {
+                    tracing::debug!(
+                        "Found {} matching chips for AVR signature {:02x?}, unable to determine chip",
+                        identified_chips.len(),
+                        avr_info.signature
+                    );
+                    return Err(RegistryError::ChipAutodetectFailed);
+                }
+
+                identified_chips[0]
             }
         };
         Ok(self.get_target(family, chip))
