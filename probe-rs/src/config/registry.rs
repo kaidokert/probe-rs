@@ -357,6 +357,27 @@ impl Registry {
 
                 identified_chips[0]
             }
+            ChipInfo::Avr(avr_info) => {
+                // Search all families for a chip whose AvrCoreAccessOptions.signature matches.
+                for family in &self.families {
+                    for chip in family.variants() {
+                        if let Some(core) = chip.cores.first() {
+                            if let probe_rs_target::CoreAccessOptions::Avr(opts) =
+                                &core.core_access_options
+                            {
+                                if opts.signature == avr_info.signature {
+                                    return Ok(self.get_target(family, chip));
+                                }
+                            }
+                        }
+                    }
+                }
+                tracing::debug!(
+                    "No AVR chip found matching signature {:02x?}",
+                    avr_info.signature
+                );
+                return Err(RegistryError::ChipAutodetectFailed);
+            }
         };
         Ok(self.get_target(family, chip))
     }

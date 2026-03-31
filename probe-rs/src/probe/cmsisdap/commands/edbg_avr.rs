@@ -160,6 +160,34 @@ pub struct AvrChipDescriptor {
     pub hvupdi_variant: u8,
 }
 
+impl From<&probe_rs_target::AvrCoreAccessOptions> for AvrChipDescriptor {
+    fn from(opts: &probe_rs_target::AvrCoreAccessOptions) -> Self {
+        Self {
+            name: "",
+            signature: opts.signature,
+            flash_base: opts.flash_base,
+            flash_size: opts.flash_size,
+            flash_page_size: opts.flash_page_size,
+            eeprom_base: opts.eeprom_base,
+            eeprom_size: opts.eeprom_size,
+            eeprom_page_size: opts.eeprom_page_size,
+            fuses_base: opts.fuses_base,
+            fuses_size: opts.fuses_size,
+            lock_base: opts.lock_base,
+            lock_size: opts.lock_size,
+            userrow_base: opts.userrow_base,
+            userrow_size: opts.userrow_size,
+            signature_base: opts.signature_base,
+            prodsig_size: opts.prodsig_size,
+            nvm_base: opts.nvm_base,
+            ocd_base: opts.ocd_base,
+            syscfg_base: opts.syscfg_base,
+            address_mode: opts.address_mode,
+            hvupdi_variant: opts.hvupdi_variant,
+        }
+    }
+}
+
 /// Persistent debug session state tracked across CoreInterface calls.
 #[derive(Debug, Default)]
 pub struct AvrDebugState {
@@ -432,7 +460,7 @@ pub fn read_pkobn_updi_region(
 /// so we skip signature verification here and go straight to `enter_programming_session`.
 pub fn read_attached_pkobn_updi_region(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     region: AvrMemoryRegion,
     offset: u32,
     length: u32,
@@ -455,7 +483,7 @@ pub fn read_attached_pkobn_updi_region(
 /// (`auto_determine_target` -> `identify_attached_pkobn_updi` -> `auto_detect_and_enter`).
 pub fn erase_attached_pkobn_updi(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
 ) -> Result<(), DebugProbeError> {
     let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, chip);
     let result = (|| {
@@ -473,7 +501,7 @@ pub fn erase_attached_pkobn_updi(
 /// (`auto_determine_target` -> `identify_attached_pkobn_updi` -> `auto_detect_and_enter`).
 pub fn write_attached_pkobn_updi_flash(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     offset: u32,
     data: &[u8],
 ) -> Result<(), DebugProbeError> {
@@ -576,7 +604,7 @@ pub fn reset_pkobn_updi(selector: &DebugProbeSelector) -> Result<(), DebugProbeE
 /// Identify the AVR chip attached to a CMSIS-DAP probe by trying each known descriptor.
 pub fn identify_attached_pkobn_updi(
     probe: &mut super::super::CmsisDap,
-) -> Result<&'static AvrChipDescriptor, DebugProbeError> {
+) -> Result<&AvrChipDescriptor, DebugProbeError> {
     let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &ATMEGA4809);
     let result = (|| {
         let _ = transport.auto_detect_and_enter()?;
@@ -647,7 +675,7 @@ struct EdbgAvrTransport<'a> {
     general_signed_on: bool,
     avr_signed_on: bool,
     programming_enabled: bool,
-    chip: &'static AvrChipDescriptor,
+    chip: &'a AvrChipDescriptor,
 }
 
 impl EdbgAvrTransport<'static> {
@@ -668,7 +696,7 @@ impl EdbgAvrTransport<'static> {
 impl<'a> EdbgAvrTransport<'a> {
     fn from_attached_device(
         device: &'a mut CmsisDapDevice,
-        chip: &'static AvrChipDescriptor,
+        chip: &'a AvrChipDescriptor,
     ) -> Self {
         Self {
             device: TransportDevice::Borrowed(device),
@@ -684,7 +712,7 @@ impl<'a> EdbgAvrTransport<'a> {
 
     fn from_attached_device_with_debug_state(
         device: &'a mut CmsisDapDevice,
-        chip: &'static AvrChipDescriptor,
+        chip: &'a AvrChipDescriptor,
         debug_state: &AvrDebugState,
     ) -> Self {
         Self {
@@ -1777,7 +1805,7 @@ impl<'a> EdbgAvrTransport<'a> {
 
 fn ensure_debug_session(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<(), DebugProbeError> {
     if !state.in_debug_mode {
@@ -1789,7 +1817,7 @@ fn ensure_debug_session(
 /// Enter OCD debug mode: sign on, attach to OCD module.
 pub fn debug_avr_enter(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<(), DebugProbeError> {
     let mut transport =
@@ -1803,7 +1831,7 @@ pub fn debug_avr_enter(
 /// Halt the target and return the PC (byte address).
 pub fn debug_avr_halt(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<u32, DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1818,7 +1846,7 @@ pub fn debug_avr_halt(
 /// Resume target execution.
 pub fn debug_avr_run(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<(), DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1843,7 +1871,7 @@ pub fn debug_avr_run(
 /// Single-step the target and return the new PC (byte address).
 pub fn debug_avr_step(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<u32, DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1858,7 +1886,7 @@ pub fn debug_avr_step(
 /// Read the program counter (byte address).
 pub fn debug_avr_read_pc(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<u32, DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1872,7 +1900,7 @@ pub fn debug_avr_read_pc(
 /// Query whether the target is halted (true) or running (false).
 pub fn debug_avr_status(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<bool, DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1886,7 +1914,7 @@ pub fn debug_avr_status(
 /// Read the 32 general-purpose registers R0..R31.
 pub fn debug_avr_read_registers(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<[u8; 32], DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1902,7 +1930,7 @@ pub fn debug_avr_read_registers(
 /// Read the SREG (status register).
 pub fn debug_avr_read_sreg(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<u8, DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1916,7 +1944,7 @@ pub fn debug_avr_read_sreg(
 /// Read the stack pointer (16-bit).
 pub fn debug_avr_read_sp(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<u16, DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1930,7 +1958,7 @@ pub fn debug_avr_read_sp(
 /// Set a hardware breakpoint at the given byte address.
 pub fn debug_avr_hw_break_set(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
     bp_index: u8,
     address: u32,
@@ -1946,7 +1974,7 @@ pub fn debug_avr_hw_break_set(
 /// Clear a hardware breakpoint.
 pub fn debug_avr_hw_break_clear(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
     bp_index: u8,
 ) -> Result<(), DebugProbeError> {
@@ -1961,7 +1989,7 @@ pub fn debug_avr_hw_break_clear(
 /// Reset the target through the debug transport.
 pub fn debug_avr_reset(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<(), DebugProbeError> {
     ensure_debug_session(probe, chip, state)?;
@@ -1975,7 +2003,7 @@ pub fn debug_avr_reset(
 /// Read memory through the debug transport (for use while halted).
 pub fn debug_avr_read_memory(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
     memtype: u8,
     address: u32,
@@ -1992,7 +2020,7 @@ pub fn debug_avr_read_memory(
 /// Clean up OCD debug session: resume target, detach, sign off.
 pub fn debug_avr_cleanup(
     probe: &mut super::super::CmsisDap,
-    chip: &'static AvrChipDescriptor,
+    chip: &AvrChipDescriptor,
     state: &mut AvrDebugState,
 ) -> Result<(), DebugProbeError> {
     if !state.in_debug_mode {

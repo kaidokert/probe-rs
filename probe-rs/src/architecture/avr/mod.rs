@@ -1,25 +1,21 @@
 //! AVR architecture support for UPDI-attached chips via EDBG/nEDBG probes.
 //!
 //! Provides [`CoreInterface`] + [`MemoryInterface`] that routes operations
-//! through the EDBG AVR transport layer, including OCD-based debug support
+//! through the [`UpdiInterface`] trait, including OCD-based debug support
 //! (halt, step, breakpoints, register reads).
+
+pub mod communication_interface;
+pub use communication_interface::UpdiInterface;
 
 use crate::{
     CoreInterface, CoreRegister, CoreStatus, CoreType, Error, MemoryInterface,
+    config::MemoryRegion,
     core::{
         Architecture, CoreInformation, CoreRegisters, RegisterId, RegisterValue,
         registers::UnwindRule,
     },
-    probe::{
-        DebugProbe,
-        cmsisdap::{
-            AvrChipDescriptor, AvrDebugState, AvrMemoryRegion, CmsisDap, DEBUG_MTYPE_EEPROM,
-            DEBUG_MTYPE_FLASH, DEBUG_MTYPE_SRAM, debug_avr_cleanup, debug_avr_halt,
-            debug_avr_hw_break_clear, debug_avr_hw_break_set, debug_avr_read_memory,
-            debug_avr_read_pc, debug_avr_read_registers, debug_avr_read_sp, debug_avr_read_sreg,
-            debug_avr_reset, debug_avr_run, debug_avr_status, debug_avr_step,
-            read_attached_pkobn_updi_region, write_attached_pkobn_updi_flash,
-        },
+    probe::cmsisdap::{
+        AvrDebugState, AvrMemoryRegion, DEBUG_MTYPE_EEPROM, DEBUG_MTYPE_SRAM,
     },
 };
 use std::sync::LazyLock;
@@ -166,110 +162,90 @@ pub static AVR_CORE_REGISTERS: LazyLock<CoreRegisters> = LazyLock::new(|| {
 /// Supports halt, step, breakpoints, and register reads through the OCD module,
 /// as well as flash/erase/read through the programming interface.
 pub struct Avr<'probe> {
-    probe: &'probe mut CmsisDap,
-    chip: &'static AvrChipDescriptor,
-    state: &'probe mut AvrCoreState,
+    interface: &'probe mut dyn UpdiInterface,
+    memory_map: &'probe [MemoryRegion],
 }
 
 impl<'probe> Avr<'probe> {
     /// Create a new AVR core interface.
-    pub fn new(
-        probe: &'probe mut CmsisDap,
-        state: &'probe mut AvrCoreState,
-        chip: &'static AvrChipDescriptor,
-    ) -> Self {
-        Self { probe, state, chip }
+    pub fn new(interface: &'probe mut dyn UpdiInterface, memory_map: &'probe [MemoryRegion]) -> Self {
+        Self { interface, memory_map }
     }
 
     /// Map an absolute address to an (AvrMemoryRegion, region-relative offset) pair.
     ///
-    /// The address space layout uses the chip descriptor's base addresses:
-    /// Flash is addressed as 0-based offsets (`[0 .. flash_size)`), but we also accept
-    /// the data-space mapping (`[flash_base .. flash_base + flash_size)`) and translate it
-    /// back to a 0-based offset automatically.
-    ///
-    /// - `[0 .. flash_size)` -> Flash (region offset = address)
-    /// - `[flash_base .. flash_base + flash_size)` -> Flash (region offset = address - flash_base)
-    /// - `[eeprom_base .. eeprom_base + eeprom_size)` -> EEPROM
-    /// - `[fuses_base .. fuses_base + fuses_size)` -> Fuses
-    /// - `[lock_base .. lock_base + lock_size)` -> Lock
-    /// - `[userrow_base .. userrow_base + userrow_size)` -> UserRow
-    /// - `[signature_base .. signature_base + prodsig_size)` -> ProdSig
+    /// Uses the target's memory_map to determine which region an address belongs to.
     fn address_to_region(&self, address: u64) -> Result<(AvrMemoryRegion, u32), Error> {
-        let addr = u32::try_from(address).map_err(|_| {
-            Error::Other(format!("AVR address {address:#010x} exceeds 32-bit range"))
-        })?;
-        let chip = self.chip;
-
-        if addr < chip.flash_size {
-            return Ok((AvrMemoryRegion::Flash, addr));
-        }
-        if chip.flash_base > 0
-            && addr >= chip.flash_base
-            && addr < chip.flash_base + chip.flash_size
-        {
-            return Ok((AvrMemoryRegion::Flash, addr - chip.flash_base));
-        }
-        if addr >= chip.eeprom_base && addr < chip.eeprom_base + chip.eeprom_size {
-            return Ok((AvrMemoryRegion::Eeprom, addr - chip.eeprom_base));
-        }
-        if addr >= chip.fuses_base && addr < chip.fuses_base + chip.fuses_size {
-            return Ok((AvrMemoryRegion::Fuses, addr - chip.fuses_base));
-        }
-        if addr >= chip.lock_base && addr < chip.lock_base + chip.lock_size {
-            return Ok((AvrMemoryRegion::Lock, addr - chip.lock_base));
-        }
-        if addr >= chip.userrow_base && addr < chip.userrow_base + chip.userrow_size {
-            return Ok((AvrMemoryRegion::UserRow, addr - chip.userrow_base));
-        }
-        if addr >= chip.signature_base && addr < chip.signature_base + chip.prodsig_size {
-            return Ok((AvrMemoryRegion::ProdSig, addr - chip.signature_base));
+        for region in self.memory_map {
+            if region.contains(address) {
+                let range = region.address_range();
+                let offset = (address - range.start) as u32;
+                let avr_region = match region {
+                    MemoryRegion::Nvm(r) if r.name.as_deref() == Some("Flash") => {
+                        AvrMemoryRegion::Flash
+                    }
+                    MemoryRegion::Nvm(r) if r.name.as_deref() == Some("EEPROM") => {
+                        AvrMemoryRegion::Eeprom
+                    }
+                    MemoryRegion::Generic(r) => match r.name.as_deref() {
+                        Some("Fuses") => AvrMemoryRegion::Fuses,
+                        Some("Lock") => AvrMemoryRegion::Lock,
+                        Some("UserRow") => AvrMemoryRegion::UserRow,
+                        Some("ProdSig") => AvrMemoryRegion::ProdSig,
+                        _ => {
+                            return Err(Error::Other(format!(
+                                "AVR address {address:#010x} in unnamed generic region"
+                            )));
+                        }
+                    },
+                    _ => continue,
+                };
+                return Ok((avr_region, offset));
+            }
         }
 
         Err(Error::Other(format!(
-            "AVR address {addr:#010x} does not map to any known memory region for {}",
-            chip.name
+            "AVR address {address:#010x} does not map to any known memory region"
         )))
     }
 
     /// Map an absolute data-space address to a (debug memtype, address) pair for
     /// use when the OCD debug transport is active.
+    ///
+    /// Uses the target's memory_map to determine the EDBG memory type.
     fn debug_address_to_memtype(&self, address: u64) -> Result<(u8, u32), Error> {
         let addr = u32::try_from(address).map_err(|_| {
             Error::Other(format!("AVR address {address:#010x} exceeds 32-bit range"))
         })?;
-        let chip = self.chip;
 
         // GDB AVR address spaces:
         //   0x000000..          -> Program memory (flash), byte-addressed
         //   0x800000..0x80FFFF  -> Data memory (SRAM/IO/peripherals)
-        // Strip the 0x800000 GDB data-space offset if present.
         const GDB_AVR_DATA_OFFSET: u32 = 0x800000;
 
         if addr >= GDB_AVR_DATA_OFFSET {
+            // Data-space address: determine memtype from region
             let data_addr = addr - GDB_AVR_DATA_OFFSET;
-            // Map through the data-space: SRAM, IO, peripherals, memory-mapped flash
-            if chip.flash_base > 0
-                && data_addr >= chip.flash_base
-                && data_addr < chip.flash_base + chip.flash_size
-            {
-                return Ok((DEBUG_MTYPE_FLASH, data_addr - chip.flash_base));
+            for region in self.memory_map {
+                if region.contains(address as u64) {
+                    let memtype = match region {
+                        MemoryRegion::Nvm(r) if r.name.as_deref() == Some("EEPROM") => {
+                            DEBUG_MTYPE_EEPROM
+                        }
+                        _ => DEBUG_MTYPE_SRAM,
+                    };
+                    return Ok((memtype, data_addr));
+                }
             }
-            if data_addr >= chip.eeprom_base && data_addr < chip.eeprom_base + chip.eeprom_size {
-                return Ok((DEBUG_MTYPE_EEPROM, data_addr));
-            }
+            // Fallback: treat as SRAM
             return Ok((DEBUG_MTYPE_SRAM, data_addr));
         }
 
         // Program-space address (flash), byte-addressed.
         // Flash is memory-mapped in the data space at flash_base, so read it
         // via SRAM memtype at the data-space address.
-        if addr < chip.flash_size {
-            return Ok((DEBUG_MTYPE_SRAM, chip.flash_base + addr));
-        }
-
-        // Fallback: treat as data space
-        Ok((DEBUG_MTYPE_SRAM, addr))
+        let flash_base = self.interface.chip().flash_base;
+        Ok((DEBUG_MTYPE_SRAM, flash_base + addr))
     }
 }
 
@@ -317,22 +293,15 @@ impl MemoryInterface for Avr<'_> {
         tracing::trace!(
             "AVR read_8: addr=0x{address:08x} len={} debug_mode={}",
             data.len(),
-            self.state.debug_state.in_debug_mode
+            self.interface.debug_state().in_debug_mode
         );
-        if self.state.debug_state.in_debug_mode {
+        if self.interface.debug_state().in_debug_mode {
             // In debug mode, use the debug transport directly
             let (memtype, addr) = self.debug_address_to_memtype(address)?;
             tracing::trace!("AVR read_8: memtype=0x{memtype:02x} mapped_addr=0x{addr:04x}");
             let length = u32::try_from(data.len())
                 .map_err(|_| Error::Other("AVR read length exceeds 32-bit range".to_string()))?;
-            let bytes = match debug_avr_read_memory(
-                self.probe,
-                self.chip,
-                &mut self.state.debug_state,
-                memtype,
-                addr,
-                length,
-            ) {
+            let bytes = match self.interface.read_memory(memtype, addr, length) {
                 Ok(b) => b,
                 Err(e) => {
                     tracing::debug!("AVR read_8: EDBG read failed: {e}");
@@ -353,8 +322,7 @@ impl MemoryInterface for Avr<'_> {
             let (region, offset) = self.address_to_region(address)?;
             let length = u32::try_from(data.len())
                 .map_err(|_| Error::Other("AVR read length exceeds 32-bit range".to_string()))?;
-            let bytes =
-                read_attached_pkobn_updi_region(self.probe, self.chip, region, offset, length)?;
+            let bytes = self.interface.read_region(region, offset, length)?;
             if bytes.len() < data.len() {
                 return Err(Error::Other(format!(
                     "AVR read returned {} bytes, expected {}",
@@ -396,7 +364,7 @@ impl MemoryInterface for Avr<'_> {
                 "AVR writes currently only support the flash region",
             ));
         }
-        write_attached_pkobn_updi_flash(self.probe, self.chip, offset, data)?;
+        self.interface.write_flash(offset, data)?;
         Ok(())
     }
 
@@ -419,7 +387,7 @@ impl CoreInterface for Avr<'_> {
     fn wait_for_core_halted(&mut self, timeout: Duration) -> Result<(), Error> {
         let start = Instant::now();
         loop {
-            match debug_avr_status(self.probe, self.chip, &mut self.state.debug_state) {
+            match self.interface.status() {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
                     if start.elapsed() >= timeout {
@@ -433,23 +401,19 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn core_halted(&mut self) -> Result<bool, Error> {
-        if !self.state.debug_state.in_debug_mode {
-            // Not in debug mode yet — report halted for compatibility with
-            // callers that check before entering debug mode.
+        if !self.interface.debug_state().in_debug_mode {
             return Ok(true);
         }
-        debug_avr_status(self.probe, self.chip, &mut self.state.debug_state).map_err(Error::Probe)
+        self.interface.status().map_err(Error::Probe)
     }
 
     fn status(&mut self) -> Result<CoreStatus, Error> {
-        if !self.state.debug_state.in_debug_mode {
+        if !self.interface.debug_state().in_debug_mode {
             return Ok(CoreStatus::Unknown);
         }
-        let halted = debug_avr_status(self.probe, self.chip, &mut self.state.debug_state)
-            .map_err(Error::Probe)?;
+        let halted = self.interface.status().map_err(Error::Probe)?;
         if halted {
-            // Check if we stopped at a breakpoint address
-            let reason = if self.state.debug_state.hw_breakpoint.is_some() {
+            let reason = if self.interface.debug_state().hw_breakpoint.is_some() {
                 crate::HaltReason::Breakpoint(crate::BreakpointCause::Hardware)
             } else {
                 crate::HaltReason::Request
@@ -461,36 +425,30 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn halt(&mut self, _timeout: Duration) -> Result<CoreInformation, Error> {
-        let pc = debug_avr_halt(self.probe, self.chip, &mut self.state.debug_state)
-            .map_err(Error::Probe)?;
+        let pc = self.interface.halt().map_err(Error::Probe)?;
         Ok(CoreInformation { pc: pc as u64 })
     }
 
     fn run(&mut self) -> Result<(), Error> {
-        debug_avr_run(self.probe, self.chip, &mut self.state.debug_state).map_err(Error::Probe)
+        self.interface.run().map_err(Error::Probe)
     }
 
     fn reset(&mut self) -> Result<(), Error> {
-        if self.state.debug_state.in_debug_mode {
-            debug_avr_reset(self.probe, self.chip, &mut self.state.debug_state)
-                .map_err(Error::Probe)
+        if self.interface.debug_state().in_debug_mode {
+            self.interface.reset().map_err(Error::Probe)
         } else {
-            self.probe.target_reset().map_err(Error::from)
+            self.interface.target_reset().map_err(Error::Probe)
         }
     }
 
     fn reset_and_halt(&mut self, _timeout: Duration) -> Result<CoreInformation, Error> {
-        // Enter debug mode, reset, then halt
-        debug_avr_reset(self.probe, self.chip, &mut self.state.debug_state)
-            .map_err(Error::Probe)?;
-        let pc = debug_avr_halt(self.probe, self.chip, &mut self.state.debug_state)
-            .map_err(Error::Probe)?;
+        self.interface.reset().map_err(Error::Probe)?;
+        let pc = self.interface.halt().map_err(Error::Probe)?;
         Ok(CoreInformation { pc: pc as u64 })
     }
 
     fn step(&mut self) -> Result<CoreInformation, Error> {
-        let pc = debug_avr_step(self.probe, self.chip, &mut self.state.debug_state)
-            .map_err(Error::Probe)?;
+        let pc = self.interface.step().map_err(Error::Probe)?;
         Ok(CoreInformation { pc: pc as u64 })
     }
 
@@ -498,27 +456,19 @@ impl CoreInterface for Avr<'_> {
         let id = address.0;
         match id {
             0..=31 => {
-                let regs =
-                    debug_avr_read_registers(self.probe, self.chip, &mut self.state.debug_state)
-                        .map_err(Error::Probe)?;
+                let regs = self.interface.read_registers().map_err(Error::Probe)?;
                 Ok(RegisterValue::U32(regs[id as usize] as u32))
             }
             32 => {
-                // SREG (GDB register 32)
-                let sreg = debug_avr_read_sreg(self.probe, self.chip, &mut self.state.debug_state)
-                    .map_err(Error::Probe)?;
+                let sreg = self.interface.read_sreg().map_err(Error::Probe)?;
                 Ok(RegisterValue::U32(sreg as u32))
             }
             33 => {
-                // SP (GDB register 33)
-                let sp = debug_avr_read_sp(self.probe, self.chip, &mut self.state.debug_state)
-                    .map_err(Error::Probe)?;
+                let sp = self.interface.read_sp().map_err(Error::Probe)?;
                 Ok(RegisterValue::U32(sp as u32))
             }
             34 => {
-                // PC (GDB register 34)
-                let pc = debug_avr_read_pc(self.probe, self.chip, &mut self.state.debug_state)
-                    .map_err(Error::Probe)?;
+                let pc = self.interface.read_pc().map_err(Error::Probe)?;
                 Ok(RegisterValue::U32(pc))
             }
             _ => Err(Error::Other(format!("AVR: unknown register id {}", id))),
@@ -536,7 +486,7 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn hw_breakpoints(&mut self) -> Result<Vec<Option<u64>>, Error> {
-        Ok(vec![self.state.debug_state.hw_breakpoint])
+        Ok(vec![self.interface.debug_state().hw_breakpoint])
     }
 
     fn enable_breakpoints(&mut self, _state: bool) -> Result<(), Error> {
@@ -555,15 +505,10 @@ impl CoreInterface for Avr<'_> {
                 "AVR breakpoint address {addr:#x} exceeds 32-bit range"
             ))
         })?;
-        debug_avr_hw_break_set(
-            self.probe,
-            self.chip,
-            &mut self.state.debug_state,
-            unit_index as u8,
-            addr32,
-        )
-        .map_err(Error::Probe)?;
-        self.state.debug_state.hw_breakpoint = Some(addr);
+        self.interface
+            .hw_break_set(unit_index as u8, addr32)
+            .map_err(Error::Probe)?;
+        self.interface.debug_state_mut().hw_breakpoint = Some(addr);
         Ok(())
     }
 
@@ -574,18 +519,10 @@ impl CoreInterface for Avr<'_> {
                 unit_index
             )));
         }
-        // Clear the EDBG-side breakpoint but keep hw_breakpoint address
-        // so run() can re-use it with run_to_address.
-        // GDB removes/re-inserts breakpoints around each continue cycle.
-        // Setting hw_breakpoint to None here would lose the address for run_to_address.
-        debug_avr_hw_break_clear(
-            self.probe,
-            self.chip,
-            &mut self.state.debug_state,
-            unit_index as u8,
-        )
-        .map_err(Error::Probe)?;
-        self.state.debug_state.hw_breakpoint = None;
+        self.interface
+            .hw_break_clear(unit_index as u8)
+            .map_err(Error::Probe)?;
+        self.interface.debug_state_mut().hw_breakpoint = None;
         Ok(())
     }
 
@@ -610,7 +547,7 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn hw_breakpoints_enabled(&self) -> bool {
-        self.state.debug_state.in_debug_mode
+        self.interface.debug_state().in_debug_mode
     }
 
     fn architecture(&self) -> Architecture {
@@ -642,6 +579,6 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn debug_core_stop(&mut self) -> Result<(), Error> {
-        debug_avr_cleanup(self.probe, self.chip, &mut self.state.debug_state).map_err(Error::Probe)
+        self.interface.cleanup().map_err(Error::Probe)
     }
 }

@@ -75,7 +75,6 @@ impl<'a> RuntimeTarget<'a> {
     ) -> Result<Self, anyhow::Error> {
         let listener = TcpListener::bind(addrs)?;
         listener.set_nonblocking(true)?;
-        eprintln!("[gdb] Listener bound to {:?}", listener.local_addr());
 
         Ok(Self {
             session,

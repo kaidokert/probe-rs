@@ -56,9 +56,13 @@ impl Cmd {
                 .reset_and_halt(Duration::from_millis(100))?;
         }
 
+        let gdb_connection_string = self
+            .gdb_connection_string
+            .unwrap_or_else(|| "localhost:1337".to_string());
+
         let instances = crate::cmd::gdb_server::GdbInstanceConfiguration::from_session(
             &session,
-            self.gdb_connection_string,
+            Some(gdb_connection_string),
         );
 
         for instance in instances.iter() {
@@ -86,7 +90,7 @@ impl Cmd {
                 cmd.arg("--symbols").arg(path);
             }
             cmd.args(self.gdb_args);
-            tracing::debug!("Spawning {cmd:?}");
+            eprintln!("Spawning {cmd:?}");
             Some(cmd.spawn()?)
         } else {
             None
