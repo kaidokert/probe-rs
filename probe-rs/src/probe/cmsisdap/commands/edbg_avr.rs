@@ -4,11 +4,6 @@ use super::{
         connect::{ConnectRequest, ConnectResponse},
         disconnect::{DisconnectRequest, DisconnectResponse},
         host_status::HostStatusRequest,
-        info::{
-            FirmwareVersionCommand, PacketSizeCommand, ProductIdCommand, SerialNumberCommand,
-            VendorCommand,
-        },
-        reset::{ResetRequest, ResetResponse},
     },
     send_command,
 };
@@ -117,7 +112,7 @@ const AVR_SIBLEN: usize = 32;
 #[derive(Debug, Clone)]
 pub struct AvrChipDescriptor {
     /// Human-readable chip name (e.g. "ATmega4809").
-    pub name: &'static str,
+    pub name: String,
     /// Three-byte device signature read from production signature row.
     pub signature: [u8; 3],
     /// Flash memory base address in the data space.
@@ -163,7 +158,7 @@ pub struct AvrChipDescriptor {
 impl From<&probe_rs_target::AvrCoreAccessOptions> for AvrChipDescriptor {
     fn from(opts: &probe_rs_target::AvrCoreAccessOptions) -> Self {
         Self {
-            name: "",
+            name: String::new(),
             signature: opts.signature,
             flash_base: opts.flash_base,
             flash_size: opts.flash_size,
@@ -201,89 +196,6 @@ pub struct AvrDebugState {
     pub in_debug_mode: bool,
     /// Cached hardware breakpoint state (one slot for ATmega4809).
     pub hw_breakpoint: Option<u64>,
-}
-
-/// Chip descriptor for the ATmega4809 (megaAVR 0-series, 48 KB flash).
-pub const ATMEGA4809: AvrChipDescriptor = AvrChipDescriptor {
-    name: "ATmega4809",
-    signature: [0x1e, 0x96, 0x51],
-    flash_base: 0x4000,
-    flash_size: 0xC000,
-    flash_page_size: 128,
-    eeprom_base: 0x1400,
-    eeprom_size: 256,
-    eeprom_page_size: 64,
-    fuses_base: 0x1280,
-    fuses_size: 10,
-    lock_base: 0x128A,
-    lock_size: 1,
-    userrow_base: 0x1300,
-    userrow_size: 64,
-    signature_base: 0x1100,
-    prodsig_size: 128,
-    nvm_base: 0x1000,
-    ocd_base: 0x0F80,
-    syscfg_base: 0x0F00,
-    address_mode: 0,
-    hvupdi_variant: 1,
-};
-
-/// Chip descriptor for the AVR128DB48 (AVR DB-series, 128 KB flash).
-pub const AVR128DB48: AvrChipDescriptor = AvrChipDescriptor {
-    name: "AVR128DB48",
-    signature: [0x1e, 0x97, 0x0c],
-    flash_base: 0x800000,
-    flash_size: 0x20000,
-    flash_page_size: 512,
-    eeprom_base: 0x1400,
-    eeprom_size: 512,
-    eeprom_page_size: 1,
-    fuses_base: 0x1050,
-    fuses_size: 16,
-    lock_base: 0x1040,
-    lock_size: 4,
-    userrow_base: 0x1080,
-    userrow_size: 32,
-    signature_base: 0x1100,
-    prodsig_size: 128,
-    nvm_base: 0x1000,
-    ocd_base: 0x0F80,
-    syscfg_base: 0x0F00,
-    address_mode: 1,
-    hvupdi_variant: 1,
-};
-
-/// Chip descriptor for the AVR64EA48 (AVR EA-series, 64 KB flash).
-pub const AVR64EA48: AvrChipDescriptor = AvrChipDescriptor {
-    name: "AVR64EA48",
-    signature: [0x1e, 0x96, 0x1e],
-    flash_base: 0x800000,
-    flash_size: 0x10000,
-    flash_page_size: 128,
-    eeprom_base: 0x1400,
-    eeprom_size: 512,
-    eeprom_page_size: 8,
-    fuses_base: 0x1050,
-    fuses_size: 16,
-    lock_base: 0x1040,
-    lock_size: 4,
-    userrow_base: 0x1080,
-    userrow_size: 64,
-    signature_base: 0x1100,
-    prodsig_size: 128,
-    nvm_base: 0x1000,
-    ocd_base: 0x0F80,
-    syscfg_base: 0x0F00,
-    address_mode: 1,
-    hvupdi_variant: 2,
-};
-
-/// All known AVR UPDI chip descriptors, tried in order during auto-detection.
-pub const KNOWN_AVR_CHIPS: &[AvrChipDescriptor] = &[ATMEGA4809, AVR128DB48, AVR64EA48];
-
-/// Look up a chip descriptor by its three-byte device signature.
-pub fn lookup_avr_chip(signature: &[u8; 3]) -> Option<&'static AvrChipDescriptor> {
-    KNOWN_AVR_CHIPS.iter().find(|c| &c.signature == signature)
 }
 
 /// Firmware version reported by the EDBG/JTAG3 general parameter block.
@@ -338,8 +250,8 @@ pub struct PkobnUpdiInfo {
     pub userrow: Vec<u8>,
     /// Raw production signature bytes.
     pub prodsig: Vec<u8>,
-    /// Resolved chip descriptor when the signature matches a known target.
-    pub chip: Option<&'static AvrChipDescriptor>,
+    /// Detected chip name when the signature matches a known target.
+    pub chip_name: Option<String>,
 }
 
 impl PkobnUpdiInfo {
@@ -417,8 +329,8 @@ impl PkobnUpdiInfo {
                 chunk.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
             ));
         }
-        if let Some(chip) = self.chip {
-            lines.push(format!("Detected part: {}", chip.name));
+        if let Some(name) = &self.chip_name {
+            lines.push(format!("Detected part: {name}"));
         }
         lines
     }
@@ -447,8 +359,6 @@ pub enum EdbgAvrError {
     CmsisDap(#[from] CmsisDapError),
     /// Error while using the probe transport.
     Transport(#[from] SendError),
-    /// The selected probe is not supported by the narrow EDBG AVR path: {selector}
-    UnsupportedProbe { selector: DebugProbeSelector },
     /// Unexpected EDBG AVR response while handling {context}: {details}
     UnexpectedResponse {
         context: &'static str,
@@ -467,73 +377,7 @@ pub enum EdbgAvrError {
 
 impl ProbeError for EdbgAvrError {}
 
-/// Query a Microchip `pkobn_updi` / `03eb:2175` probe with auto-detected AVR target.
-pub fn query_pkobn_updi(selector: &DebugProbeSelector) -> Result<PkobnUpdiInfo, DebugProbeError> {
-    if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
-        return Err(EdbgAvrError::UnsupportedProbe {
-            selector: selector.clone(),
-        }
-        .into());
-    }
-
-    let mut device = super::super::tools::open_device_from_selector(selector)?;
-    device.drain();
-    let packet_size = device.find_packet_size()? as u16;
-
-    let cmsis_dap_vendor = trim_probe_string(send_command(&mut device, &VendorCommand {})?);
-    let cmsis_dap_product = trim_probe_string(send_command(&mut device, &ProductIdCommand {})?);
-    let cmsis_dap_serial = trim_probe_string(send_command(&mut device, &SerialNumberCommand {})?);
-    let cmsis_dap_firmware_version =
-        trim_probe_string(send_command(&mut device, &FirmwareVersionCommand {})?);
-    let _ = send_command(&mut device, &PacketSizeCommand {})?;
-
-    let mut transport = EdbgAvrTransport::new(device);
-
-    let result = transport.query_target(PkobnUpdiInfo {
-        probe_selector: selector.clone(),
-        cmsis_dap_vendor,
-        cmsis_dap_product,
-        cmsis_dap_serial,
-        cmsis_dap_firmware_version,
-        cmsis_dap_packet_size: packet_size,
-        ice_serial: None,
-        ice_firmware_version: IceFirmwareVersion {
-            hardware: 0,
-            major: 0,
-            minor: 0,
-            release: 0,
-        },
-        target_voltage_mv: 0,
-        updi_clock_khz: 0,
-        partial_family_id: None,
-        sib_string: String::new(),
-        chip_revision: 0,
-        signature: [0; 3],
-        lock_bytes: vec![],
-        fuses: vec![],
-        userrow: vec![],
-        prodsig: vec![],
-        chip: None,
-    });
-
-    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
-}
-
-/// Read bytes from an AVR UPDI memory region.
-pub fn read_pkobn_updi_region(
-    selector: &DebugProbeSelector,
-    region: AvrMemoryRegion,
-    offset: u32,
-    length: u32,
-) -> Result<Vec<u8>, DebugProbeError> {
-    let mut transport = open_pkobn_transport(selector)?;
-    let result = (|| {
-        let _ = transport.auto_detect_and_enter()?;
-        transport.read_region(region, offset, length)
-    })();
-
-    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
-}
+// ---- Public API for attached probes (session-based) ----
 
 /// Read bytes from an AVR UPDI memory region using an already-open CMSIS-DAP probe.
 ///
@@ -603,8 +447,10 @@ pub fn write_attached_pkobn_updi_flash(
 /// initialisation; those fields will be `None` in the returned struct.
 pub fn query_attached_pkobn_updi(
     probe: &mut super::super::CmsisDap,
+    chips: &[AvrChipDescriptor],
 ) -> Result<PkobnUpdiInfo, DebugProbeError> {
-    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &ATMEGA4809);
+    assert!(!chips.is_empty(), "query_attached_pkobn_updi: no chip descriptors provided");
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &chips[0]);
     let selector = DebugProbeSelector {
         vendor_id: PKOBN_UPDI_VID,
         product_id: PKOBN_UPDI_PID,
@@ -635,64 +481,22 @@ pub fn query_attached_pkobn_updi(
         fuses: vec![],
         userrow: vec![],
         prodsig: vec![],
-        chip: None,
-    });
+        chip_name: None,
+    }, chips);
 
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-/// Write bytes into AVR flash memory using page programming.
-pub fn write_pkobn_updi_flash(
-    selector: &DebugProbeSelector,
-    offset: u32,
-    data: &[u8],
-) -> Result<(), DebugProbeError> {
-    let mut transport = open_pkobn_transport(selector)?;
-    let result = (|| {
-        let _ = transport.auto_detect_and_enter()?;
-        transport.write_flash(offset, data)
-    })();
-
-    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
-}
-
-/// Erase the AVR target through the EDBG AVR chip erase command.
-pub fn erase_pkobn_updi(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
-    let mut transport = open_pkobn_transport(selector)?;
-    let result = (|| {
-        let _ = transport.auto_detect_and_enter()?;
-        transport.erase_chip()
-    })();
-
-    finish_transport(&mut transport, result).map_err(DebugProbeError::from)
-}
-
-/// Reset a Microchip `pkobn_updi` / `03eb:2175` probe through the generic CMSIS-DAP reset command.
-pub fn reset_pkobn_updi(selector: &DebugProbeSelector) -> Result<(), DebugProbeError> {
-    if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
-        return Err(EdbgAvrError::UnsupportedProbe {
-            selector: selector.clone(),
-        }
-        .into());
-    }
-
-    let mut device = super::super::tools::open_device_from_selector(selector)?;
-    device.drain();
-    let _ = device.find_packet_size()?;
-    let _ = send_command(&mut device, &ResetRequest {})? as ResetResponse;
-    Ok(())
-}
-
-/// Identify the AVR chip attached to a CMSIS-DAP probe by trying each known descriptor.
+/// Identify the AVR chip attached to a CMSIS-DAP probe by trying each descriptor.
 pub fn identify_attached_pkobn_updi(
     probe: &mut super::super::CmsisDap,
-) -> Result<&AvrChipDescriptor, DebugProbeError> {
-    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &ATMEGA4809);
+    chips: &[AvrChipDescriptor],
+) -> Result<AvrChipDescriptor, DebugProbeError> {
+    assert!(!chips.is_empty(), "identify_attached_pkobn_updi: no chip descriptors provided");
+    let mut transport = EdbgAvrTransport::from_attached_device(&mut probe.device, &chips[0]);
     let result = (|| {
-        let _ = transport.auto_detect_and_enter()?;
-        // Verify the chip by reading the production signature, matching what
-        // query_target() does. This guards against multiple descriptors
-        // succeeding sign-on but only one matching the actual device.
+        let _ = transport.auto_detect_and_enter(chips)?;
+        // Verify the chip by reading the production signature.
         let prodsig = transport.read_memory(MTYPE_PRODSIG, transport.chip.signature_base, 3)?;
         if prodsig.len() < 3 {
             return Err(EdbgAvrError::UnexpectedResponse {
@@ -701,51 +505,34 @@ pub fn identify_attached_pkobn_updi(
             });
         }
         let signature: [u8; 3] = [prodsig[0], prodsig[1], prodsig[2]];
-        lookup_avr_chip(&signature).ok_or_else(|| EdbgAvrError::UnexpectedResponse {
-            context: "chip identification",
-            details: format!(
-                "unknown AVR signature: {:02x} {:02x} {:02x}",
-                signature[0], signature[1], signature[2]
-            ),
-        })
+        chips
+            .iter()
+            .find(|c| c.signature == signature)
+            .cloned()
+            .ok_or_else(|| EdbgAvrError::UnexpectedResponse {
+                context: "chip identification",
+                details: format!(
+                    "unknown AVR signature: {:02x} {:02x} {:02x}",
+                    signature[0], signature[1], signature[2]
+                ),
+            })
     })();
     finish_transport(&mut transport, result).map_err(DebugProbeError::from)
 }
 
-fn open_pkobn_transport(
-    selector: &DebugProbeSelector,
-) -> Result<EdbgAvrTransport<'static>, DebugProbeError> {
-    if selector.vendor_id != PKOBN_UPDI_VID || selector.product_id != PKOBN_UPDI_PID {
-        return Err(EdbgAvrError::UnsupportedProbe {
-            selector: selector.clone(),
-        }
-        .into());
-    }
-
-    let mut device = super::super::tools::open_device_from_selector(selector)?;
-    device.drain();
-    let _ = device.find_packet_size()?;
-    Ok(EdbgAvrTransport::new(device))
-}
-
 enum TransportDevice<'a> {
-    Owned(CmsisDapDevice),
     Borrowed(&'a mut CmsisDapDevice),
 }
 
 impl TransportDevice<'_> {
     fn as_mut(&mut self) -> &mut CmsisDapDevice {
-        match self {
-            TransportDevice::Owned(device) => device,
-            TransportDevice::Borrowed(device) => device,
-        }
+        let TransportDevice::Borrowed(device) = self;
+        device
     }
 
     fn as_ref(&self) -> &CmsisDapDevice {
-        match self {
-            TransportDevice::Owned(device) => device,
-            TransportDevice::Borrowed(device) => device,
-        }
+        let TransportDevice::Borrowed(device) = self;
+        device
     }
 }
 
@@ -758,21 +545,6 @@ struct EdbgAvrTransport<'a> {
     avr_signed_on: bool,
     programming_enabled: bool,
     chip: &'a AvrChipDescriptor,
-}
-
-impl EdbgAvrTransport<'static> {
-    fn new(device: CmsisDapDevice) -> Self {
-        Self {
-            device: TransportDevice::Owned(device),
-            command_sequence: 0,
-            prepared: false,
-            cleanup_prepare: false,
-            general_signed_on: false,
-            avr_signed_on: false,
-            programming_enabled: false,
-            chip: &ATMEGA4809,
-        }
-    }
 }
 
 impl<'a> EdbgAvrTransport<'a> {
@@ -815,8 +587,12 @@ impl<'a> EdbgAvrTransport<'a> {
         debug_state.avr_signed_on = self.avr_signed_on;
     }
 
-    fn query_target(&mut self, mut info: PkobnUpdiInfo) -> Result<PkobnUpdiInfo, EdbgAvrError> {
-        let partial_family_id = self.auto_detect_and_enter()?;
+    fn query_target(
+        &mut self,
+        mut info: PkobnUpdiInfo,
+        chips: &'a [AvrChipDescriptor],
+    ) -> Result<PkobnUpdiInfo, EdbgAvrError> {
+        let partial_family_id = self.auto_detect_and_enter(chips)?;
         info.ice_firmware_version = self.read_ice_firmware_version()?;
         info.ice_serial = self.get_info_string(CMD3_INFO_SERIAL)?;
         info.target_voltage_mv = self.get_u16_param(SCOPE_GENERAL, 1, PARM3_VTARGET)?;
@@ -881,13 +657,19 @@ impl<'a> EdbgAvrTransport<'a> {
             });
         }
         info.signature.copy_from_slice(&info.prodsig[..3]);
-        info.chip = lookup_avr_chip(&info.signature);
+        info.chip_name = chips
+            .iter()
+            .find(|c| c.signature == info.signature)
+            .map(|c| c.name.to_string());
 
         Ok(info)
     }
 
-    /// Try each known chip descriptor in turn, returning the partial family ID on success.
-    fn auto_detect_and_enter(&mut self) -> Result<Option<String>, EdbgAvrError> {
+    /// Try each chip descriptor in turn, returning the partial family ID on success.
+    fn auto_detect_and_enter(
+        &mut self,
+        chips: &'a [AvrChipDescriptor],
+    ) -> Result<Option<String>, EdbgAvrError> {
         if self.programming_enabled {
             return Ok(None);
         }
@@ -900,7 +682,7 @@ impl<'a> EdbgAvrTransport<'a> {
         self.set_param(SCOPE_AVR, 0, PARM3_SESS_PURPOSE, &[PARM3_SESS_PROGRAMMING])?;
         self.set_param(SCOPE_AVR, 1, PARM3_CONNECTION, &[PARM3_CONN_UPDI])?;
 
-        for chip in KNOWN_AVR_CHIPS {
+        for chip in chips {
             tracing::debug!("EDBG AVR: trying chip descriptor for {}", chip.name);
             self.set_param(
                 SCOPE_AVR,
@@ -938,15 +720,16 @@ impl<'a> EdbgAvrTransport<'a> {
                             self.chip.signature[1],
                             self.chip.signature[2],
                         );
-                        let actual_chip = lookup_avr_chip(&signature).ok_or_else(|| {
-                            EdbgAvrError::UnexpectedResponse {
+                        let actual_chip = chips
+                            .iter()
+                            .find(|c| c.signature == signature)
+                            .ok_or_else(|| EdbgAvrError::UnexpectedResponse {
                                 context: "signature verification",
                                 details: format!(
                                     "unknown AVR signature: {:02x} {:02x} {:02x}",
                                     signature[0], signature[1], signature[2]
                                 ),
-                            }
-                        })?;
+                            })?;
 
                         // Re-send the correct descriptor so firmware and driver
                         // agree on flash geometry, then re-enter programming mode.
@@ -2125,8 +1908,6 @@ pub fn debug_avr_cleanup(
 
 /// Memory type constant for SRAM access in debug mode.
 pub const DEBUG_MTYPE_SRAM: u8 = MTYPE_SRAM;
-/// Memory type constant for flash access in debug mode.
-pub const DEBUG_MTYPE_FLASH: u8 = MTYPE_FLASH;
 /// Memory type constant for EEPROM access in debug mode.
 pub const DEBUG_MTYPE_EEPROM: u8 = MTYPE_EEPROM;
 
@@ -2212,11 +1993,42 @@ fn build_updi_device_descriptor(chip: &AvrChipDescriptor) -> [u8; 48] {
 
 #[cfg(test)]
 mod tests {
-    use super::{ATMEGA4809, AVR64EA48, AVR128DB48, build_updi_device_descriptor};
+    use super::{AvrChipDescriptor, build_updi_device_descriptor};
+
+    fn atmega4809() -> AvrChipDescriptor { AvrChipDescriptor {
+        name: "ATmega4809".into(),
+        signature: [0x1e, 0x96, 0x51],
+        flash_base: 0x4000, flash_size: 0xC000, flash_page_size: 128,
+        eeprom_base: 0x1400, eeprom_size: 256, eeprom_page_size: 64,
+        fuses_base: 0x1280, fuses_size: 10, lock_base: 0x128A, lock_size: 1,
+        userrow_base: 0x1300, userrow_size: 64, signature_base: 0x1100, prodsig_size: 128,
+        nvm_base: 0x1000, ocd_base: 0x0F80, syscfg_base: 0x0F00,
+        address_mode: 0, hvupdi_variant: 1,
+    }}
+    fn avr128db48() -> AvrChipDescriptor { AvrChipDescriptor {
+        name: "AVR128DB48".into(),
+        signature: [0x1e, 0x97, 0x0c],
+        flash_base: 0x800000, flash_size: 0x20000, flash_page_size: 512,
+        eeprom_base: 0x1400, eeprom_size: 512, eeprom_page_size: 1,
+        fuses_base: 0x1050, fuses_size: 16, lock_base: 0x1040, lock_size: 4,
+        userrow_base: 0x1080, userrow_size: 32, signature_base: 0x1100, prodsig_size: 128,
+        nvm_base: 0x1000, ocd_base: 0x0F80, syscfg_base: 0x0F00,
+        address_mode: 1, hvupdi_variant: 1,
+    }}
+    fn avr64ea48() -> AvrChipDescriptor { AvrChipDescriptor {
+        name: "AVR64EA48".into(),
+        signature: [0x1e, 0x96, 0x1e],
+        flash_base: 0x800000, flash_size: 0x10000, flash_page_size: 128,
+        eeprom_base: 0x1400, eeprom_size: 512, eeprom_page_size: 8,
+        fuses_base: 0x1050, fuses_size: 16, lock_base: 0x1040, lock_size: 4,
+        userrow_base: 0x1080, userrow_size: 64, signature_base: 0x1100, prodsig_size: 128,
+        nvm_base: 0x1000, ocd_base: 0x0F80, syscfg_base: 0x0F00,
+        address_mode: 1, hvupdi_variant: 2,
+    }}
 
     #[test]
     fn m4809_descriptor_matches_expected_layout() {
-        let descriptor = build_updi_device_descriptor(&ATMEGA4809);
+        let descriptor = build_updi_device_descriptor(&atmega4809());
 
         assert_eq!(descriptor.len(), 48);
         assert_eq!(&descriptor[0..2], &0x4000u16.to_le_bytes());
@@ -2225,8 +2037,8 @@ mod tests {
         assert_eq!(&descriptor[4..6], &0x1000u16.to_le_bytes());
         assert_eq!(&descriptor[6..8], &0x0f80u16.to_le_bytes());
         assert_eq!(&descriptor[36..38], &0x1100u16.to_le_bytes());
-        assert_eq!(descriptor[42], ATMEGA4809.signature[1]);
-        assert_eq!(descriptor[43], ATMEGA4809.signature[2]);
+        assert_eq!(descriptor[42], atmega4809().signature[1]);
+        assert_eq!(descriptor[43], atmega4809().signature[2]);
         assert_eq!(descriptor[44], 0); // prog_base_msb: 0x4000 >> 16 = 0
         assert_eq!(descriptor[45], 0); // flash_page_size_msb: 128 >> 8 = 0
         assert_eq!(descriptor[46], 0); // 16-bit address mode
@@ -2235,7 +2047,7 @@ mod tests {
 
     #[test]
     fn avr128db48_descriptor_has_24bit_addressing() {
-        let descriptor = build_updi_device_descriptor(&AVR128DB48);
+        let descriptor = build_updi_device_descriptor(&avr128db48());
 
         assert_eq!(descriptor.len(), 48);
         // flash_base low 16 bits: 0x800000 & 0xFFFF = 0x0000
@@ -2251,8 +2063,8 @@ mod tests {
         assert_eq!(&descriptor[24..26], &32u16.to_le_bytes());
         // fuses_size = 16
         assert_eq!(descriptor[26], 16);
-        assert_eq!(descriptor[42], AVR128DB48.signature[1]);
-        assert_eq!(descriptor[43], AVR128DB48.signature[2]);
+        assert_eq!(descriptor[42], avr128db48().signature[1]);
+        assert_eq!(descriptor[43], avr128db48().signature[2]);
         // prog_base_msb: 0x800000 >> 16 = 0x80
         assert_eq!(descriptor[44], 0x80);
         // flash_page_size_msb: 512 >> 8 = 2
@@ -2264,7 +2076,7 @@ mod tests {
 
     #[test]
     fn avr64ea48_descriptor_key_fields() {
-        let descriptor = build_updi_device_descriptor(&AVR64EA48);
+        let descriptor = build_updi_device_descriptor(&avr64ea48());
 
         assert_eq!(descriptor.len(), 48);
         // flash_base low 16 bits: 0x800000 & 0xFFFF = 0x0000
@@ -2274,8 +2086,8 @@ mod tests {
         assert_eq!(descriptor[3], 8); // eeprom_page_size
         // flash_size = 0x10000
         assert_eq!(&descriptor[18..22], &0x0001_0000u32.to_le_bytes());
-        assert_eq!(descriptor[42], AVR64EA48.signature[1]);
-        assert_eq!(descriptor[43], AVR64EA48.signature[2]);
+        assert_eq!(descriptor[42], avr64ea48().signature[1]);
+        assert_eq!(descriptor[43], avr64ea48().signature[2]);
         // prog_base_msb: 0x800000 >> 16 = 0x80
         assert_eq!(descriptor[44], 0x80);
         // flash_page_size_msb: 128 >> 8 = 0

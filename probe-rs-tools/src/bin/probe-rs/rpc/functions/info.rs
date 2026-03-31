@@ -82,6 +82,24 @@ pub async fn target_info(
     request: TargetInfoRequest,
 ) -> NoResponse {
     let mut registry = ctx.registry().await;
+
+    // Build AVR chip descriptor list from registry for UPDI info queries.
+    let avr_chips: Vec<probe_rs::probe::cmsisdap::AvrChipDescriptor> = registry
+        .families()
+        .iter()
+        .flat_map(|f| f.variants())
+        .filter_map(|chip| {
+            chip.cores.first().and_then(|core| match &core.core_access_options {
+                probe_rs_target::CoreAccessOptions::Avr(opts) => {
+                    let mut desc = probe_rs::probe::cmsisdap::AvrChipDescriptor::from(opts);
+                    desc.name = chip.name.clone();
+                    Some(desc)
+                }
+                _ => None,
+            })
+        })
+        .collect();
+
     let probe_options = ProbeOptions::from(&request).load(&mut registry)?;
 
     let probe = probe_options.attach_probe(&ctx.lister())?;
@@ -93,6 +111,7 @@ pub async fn target_info(
         request.protocol,
         probe_options.connect_under_reset(),
         request.target_sel,
+        &avr_chips,
     )
     .await
     {
@@ -305,6 +324,7 @@ async fn try_show_info(
     protocol: WireProtocol,
     connect_under_reset: bool,
     target_sel: Option<u32>,
+    avr_chips: &[probe_rs::probe::cmsisdap::AvrChipDescriptor],
 ) -> anyhow::Result<()> {
     probe.select_protocol(ProbeRsWireProtocol::from(protocol))?;
 
@@ -331,7 +351,7 @@ async fn try_show_info(
         let probe_name = probe.get_name();
         let cmsis: &mut CmsisDap = Probe::try_into(&mut probe)
             .ok_or_else(|| anyhow::anyhow!("UPDI info requires a CMSIS-DAP probe"))?;
-        let info = query_attached_pkobn_updi(cmsis)?;
+        let info = query_attached_pkobn_updi(cmsis, avr_chips)?;
         ctx.publish::<TargetInfoDataTopic>(
             VarSeq::Seq2(0),
             &InfoEvent::Message(format!("Probe: {probe_name}")),

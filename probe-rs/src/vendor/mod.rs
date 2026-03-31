@@ -290,12 +290,29 @@ pub(crate) fn auto_determine_target(
     let mut found_target = None;
 
     if probe.protocol() == Some(WireProtocol::Updi) {
-        use crate::probe::cmsisdap::{CmsisDap, identify_attached_pkobn_updi};
+        use crate::probe::cmsisdap::{AvrChipDescriptor, CmsisDap, identify_attached_pkobn_updi};
+
+        // Build chip descriptor list from the YAML registry for EDBG sign-on.
+        let avr_chips: Vec<AvrChipDescriptor> = registry
+            .families()
+            .iter()
+            .flat_map(|f| f.variants())
+            .filter_map(|chip| {
+                chip.cores.first().and_then(|core| match &core.core_access_options {
+                    probe_rs_target::CoreAccessOptions::Avr(opts) => {
+                        let mut desc = AvrChipDescriptor::from(opts);
+                        desc.name = chip.name.clone();
+                        Some(desc)
+                    }
+                    _ => None,
+                })
+            })
+            .collect();
 
         let chip = {
             let cmsis: Option<&mut CmsisDap> = Probe::try_into(&mut probe);
             match cmsis {
-                Some(cmsis) => identify_attached_pkobn_updi(cmsis)?,
+                Some(cmsis) => identify_attached_pkobn_updi(cmsis, &avr_chips)?,
                 None => {
                     return Err(Error::Other(
                         "UPDI auto-detection requires a CMSIS-DAP probe".to_string(),
