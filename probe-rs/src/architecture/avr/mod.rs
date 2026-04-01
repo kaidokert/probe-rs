@@ -457,7 +457,13 @@ impl CoreInterface for Avr<'_> {
     }
 
     fn reset_and_halt(&mut self, _timeout: Duration) -> Result<CoreInformation, Error> {
-        self.interface.reset().map_err(Error::Probe)?;
+        // Match the dispatch pattern in reset(): use OCD reset when in debug
+        // mode, otherwise use the non-OCD target reset.
+        if self.interface.debug_state().in_debug_mode {
+            self.interface.reset().map_err(Error::Probe)?;
+        } else {
+            self.interface.target_reset().map_err(Error::Probe)?;
+        }
         let pc = self.interface.halt().map_err(Error::Probe)?;
         Ok(CoreInformation { pc: pc as u64 })
     }
