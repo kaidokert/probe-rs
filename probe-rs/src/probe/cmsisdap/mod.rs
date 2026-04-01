@@ -1,10 +1,9 @@
 //! CMSIS-DAP probe implementation.
+pub mod avr_interface;
 mod commands;
 mod tools;
-pub mod avr_interface;
 pub use self::commands::edbg_avr::{
-    AvrChipDescriptor, AvrDebugState, AvrMemoryRegion, DEBUG_MTYPE_EEPROM,
-    DEBUG_MTYPE_SRAM,
+    AvrChipDescriptor, AvrDebugState, AvrMemoryRegion, DEBUG_MTYPE_EEPROM, DEBUG_MTYPE_SRAM,
     IceFirmwareVersion, PkobnUpdiInfo, debug_avr_cleanup, debug_avr_enter, debug_avr_halt,
     debug_avr_hw_break_clear, debug_avr_hw_break_set, debug_avr_read_memory, debug_avr_read_pc,
     debug_avr_read_registers, debug_avr_read_sp, debug_avr_read_sreg, debug_avr_reset,

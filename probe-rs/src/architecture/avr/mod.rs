@@ -14,9 +14,7 @@ use crate::{
         Architecture, CoreInformation, CoreRegisters, RegisterId, RegisterValue,
         registers::UnwindRule,
     },
-    probe::cmsisdap::{
-        AvrDebugState, AvrMemoryRegion, DEBUG_MTYPE_EEPROM, DEBUG_MTYPE_SRAM,
-    },
+    probe::cmsisdap::{AvrDebugState, AvrMemoryRegion, DEBUG_MTYPE_EEPROM, DEBUG_MTYPE_SRAM},
 };
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -37,11 +35,11 @@ impl AvrCoreState {
 
 // ---- AVR Register Definitions ----
 //
-// Register IDs:
+// Register IDs (must match GDB's avr-tdep.c built-in layout):
 //   0..31  -> R0..R31 (8-bit general purpose)
-//   32     -> PC (program counter, 32-bit byte address)
+//   32     -> SREG (status register, 8-bit)
 //   33     -> SP (stack pointer, 16-bit)
-//   34     -> SREG (status register, 8-bit)
+//   34     -> PC (program counter, 32-bit byte address)
 //
 // For the CoreInterface trait we need designated PC, SP, FP, and RA registers.
 // AVR GCC convention: Y (R28:R29) is the frame pointer. The return address
@@ -168,8 +166,14 @@ pub struct Avr<'probe> {
 
 impl<'probe> Avr<'probe> {
     /// Create a new AVR core interface.
-    pub fn new(interface: &'probe mut dyn UpdiInterface, memory_map: &'probe [MemoryRegion]) -> Self {
-        Self { interface, memory_map }
+    pub fn new(
+        interface: &'probe mut dyn UpdiInterface,
+        memory_map: &'probe [MemoryRegion],
+    ) -> Self {
+        Self {
+            interface,
+            memory_map,
+        }
     }
 
     /// Map an absolute address to an (AvrMemoryRegion, region-relative offset) pair.
@@ -192,9 +196,10 @@ impl<'probe> Avr<'probe> {
                         Some("Lock") => AvrMemoryRegion::Lock,
                         Some("UserRow") => AvrMemoryRegion::UserRow,
                         Some("ProdSig") => AvrMemoryRegion::ProdSig,
-                        _ => {
+                        other => {
                             return Err(Error::Other(format!(
-                                "AVR address {address:#010x} in unnamed generic region"
+                                "AVR address {address:#010x} in unsupported region {:?}",
+                                other
                             )));
                         }
                     },
@@ -227,7 +232,7 @@ impl<'probe> Avr<'probe> {
             // Data-space address: determine memtype from region
             let data_addr = addr - GDB_AVR_DATA_OFFSET;
             for region in self.memory_map {
-                if region.contains(address as u64) {
+                if region.contains(address) {
                     let memtype = match region {
                         MemoryRegion::Nvm(r) if r.name.as_deref() == Some("EEPROM") => {
                             DEBUG_MTYPE_EEPROM
@@ -361,7 +366,7 @@ impl MemoryInterface for Avr<'_> {
         let (region, offset) = self.address_to_region(address)?;
         if region != AvrMemoryRegion::Flash {
             return Err(Error::NotImplemented(
-                "AVR writes currently only support the flash region",
+                "AVR writes only support the flash region; EEPROM/fuse writes require different EDBG commands",
             ));
         }
         self.interface.write_flash(offset, data)?;
@@ -402,6 +407,10 @@ impl CoreInterface for Avr<'_> {
 
     fn core_halted(&mut self) -> Result<bool, Error> {
         if !self.interface.debug_state().in_debug_mode {
+            // Before OCD is active, report halted to prevent callers from
+            // attempting halt/resume operations that would fail. The GDB server
+            // checks core_halted() on connect; returning false would trigger a
+            // halt attempt before the debug session is established.
             return Ok(true);
         }
         self.interface.status().map_err(Error::Probe)

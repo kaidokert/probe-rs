@@ -457,7 +457,6 @@ impl FormatOptions {
             }),
         }
     }
-
 }
 
 /// Determine the default location for the logfile

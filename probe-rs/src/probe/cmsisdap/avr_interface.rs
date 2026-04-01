@@ -1,16 +1,15 @@
 //! CMSIS-DAP implementation of the AVR UPDI interface.
 
-use crate::architecture::avr::UpdiInterface;
-use crate::probe::DebugProbeError;
 use super::CmsisDap;
 use super::{
-    AvrChipDescriptor, AvrDebugState, AvrMemoryRegion,
-    debug_avr_cleanup, debug_avr_enter, debug_avr_halt, debug_avr_hw_break_clear,
-    debug_avr_hw_break_set, debug_avr_read_memory, debug_avr_read_pc,
-    debug_avr_read_registers, debug_avr_read_sp, debug_avr_read_sreg, debug_avr_reset,
-    debug_avr_run, debug_avr_status, debug_avr_step, erase_attached_pkobn_updi,
+    AvrChipDescriptor, AvrDebugState, AvrMemoryRegion, debug_avr_cleanup, debug_avr_enter,
+    debug_avr_halt, debug_avr_hw_break_clear, debug_avr_hw_break_set, debug_avr_read_memory,
+    debug_avr_read_pc, debug_avr_read_registers, debug_avr_read_sp, debug_avr_read_sreg,
+    debug_avr_reset, debug_avr_run, debug_avr_status, debug_avr_step, erase_attached_pkobn_updi,
     read_attached_pkobn_updi_region, write_attached_pkobn_updi_flash,
 };
+use crate::architecture::avr::UpdiInterface;
+use crate::probe::DebugProbeError;
 
 /// CMSIS-DAP UPDI interface for AVR debug and programming operations.
 ///
@@ -40,51 +39,51 @@ impl<'a> CmsisDapUpdi<'a> {
 
 impl UpdiInterface for CmsisDapUpdi<'_> {
     fn enter_debug_mode(&mut self) -> Result<(), DebugProbeError> {
-        debug_avr_enter(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_enter(self.probe, self.chip, self.debug_state)
     }
 
     fn halt(&mut self) -> Result<u32, DebugProbeError> {
-        debug_avr_halt(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_halt(self.probe, self.chip, self.debug_state)
     }
 
     fn run(&mut self) -> Result<(), DebugProbeError> {
-        debug_avr_run(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_run(self.probe, self.chip, self.debug_state)
     }
 
     fn step(&mut self) -> Result<u32, DebugProbeError> {
-        debug_avr_step(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_step(self.probe, self.chip, self.debug_state)
     }
 
     fn read_pc(&mut self) -> Result<u32, DebugProbeError> {
-        debug_avr_read_pc(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_read_pc(self.probe, self.chip, self.debug_state)
     }
 
     fn status(&mut self) -> Result<bool, DebugProbeError> {
-        debug_avr_status(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_status(self.probe, self.chip, self.debug_state)
     }
 
     fn read_registers(&mut self) -> Result<[u8; 32], DebugProbeError> {
-        debug_avr_read_registers(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_read_registers(self.probe, self.chip, self.debug_state)
     }
 
     fn read_sreg(&mut self) -> Result<u8, DebugProbeError> {
-        debug_avr_read_sreg(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_read_sreg(self.probe, self.chip, self.debug_state)
     }
 
     fn read_sp(&mut self) -> Result<u16, DebugProbeError> {
-        debug_avr_read_sp(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_read_sp(self.probe, self.chip, self.debug_state)
     }
 
     fn hw_break_set(&mut self, bp_index: u8, address: u32) -> Result<(), DebugProbeError> {
-        debug_avr_hw_break_set(self.probe, &self.chip, &mut self.debug_state, bp_index, address)
+        debug_avr_hw_break_set(self.probe, self.chip, self.debug_state, bp_index, address)
     }
 
     fn hw_break_clear(&mut self, bp_index: u8) -> Result<(), DebugProbeError> {
-        debug_avr_hw_break_clear(self.probe, &self.chip, &mut self.debug_state, bp_index)
+        debug_avr_hw_break_clear(self.probe, self.chip, self.debug_state, bp_index)
     }
 
     fn reset(&mut self) -> Result<(), DebugProbeError> {
-        debug_avr_reset(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_reset(self.probe, self.chip, self.debug_state)
     }
 
     fn read_memory(
@@ -93,11 +92,18 @@ impl UpdiInterface for CmsisDapUpdi<'_> {
         address: u32,
         length: u32,
     ) -> Result<Vec<u8>, DebugProbeError> {
-        debug_avr_read_memory(self.probe, &self.chip, &mut self.debug_state, memtype, address, length)
+        debug_avr_read_memory(
+            self.probe,
+            self.chip,
+            self.debug_state,
+            memtype,
+            address,
+            length,
+        )
     }
 
     fn cleanup(&mut self) -> Result<(), DebugProbeError> {
-        debug_avr_cleanup(self.probe, &self.chip, &mut self.debug_state)
+        debug_avr_cleanup(self.probe, self.chip, self.debug_state)
     }
 
     fn read_region(
@@ -106,15 +112,15 @@ impl UpdiInterface for CmsisDapUpdi<'_> {
         offset: u32,
         length: u32,
     ) -> Result<Vec<u8>, DebugProbeError> {
-        read_attached_pkobn_updi_region(self.probe, &self.chip, region, offset, length)
+        read_attached_pkobn_updi_region(self.probe, self.chip, region, offset, length)
     }
 
     fn write_flash(&mut self, offset: u32, data: &[u8]) -> Result<(), DebugProbeError> {
-        write_attached_pkobn_updi_flash(self.probe, &self.chip, offset, data)
+        write_attached_pkobn_updi_flash(self.probe, self.chip, offset, data)
     }
 
     fn erase_chip(&mut self) -> Result<(), DebugProbeError> {
-        erase_attached_pkobn_updi(self.probe, &self.chip)
+        erase_attached_pkobn_updi(self.probe, self.chip)
     }
 
     fn target_reset(&mut self) -> Result<(), DebugProbeError> {
@@ -123,15 +129,15 @@ impl UpdiInterface for CmsisDapUpdi<'_> {
     }
 
     fn debug_state(&self) -> &AvrDebugState {
-        &self.debug_state
+        self.debug_state
     }
 
     fn debug_state_mut(&mut self) -> &mut AvrDebugState {
-        &mut self.debug_state
+        self.debug_state
     }
 
     fn chip(&self) -> &AvrChipDescriptor {
-        &self.chip
+        self.chip
     }
 }
 

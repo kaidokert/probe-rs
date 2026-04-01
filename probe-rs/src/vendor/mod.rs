@@ -298,14 +298,16 @@ pub(crate) fn auto_determine_target(
             .iter()
             .flat_map(|f| f.variants())
             .filter_map(|chip| {
-                chip.cores.first().and_then(|core| match &core.core_access_options {
-                    probe_rs_target::CoreAccessOptions::Avr(opts) => {
-                        let mut desc = AvrChipDescriptor::from(opts);
-                        desc.name = chip.name.clone();
-                        Some(desc)
-                    }
-                    _ => None,
-                })
+                chip.cores
+                    .first()
+                    .and_then(|core| match &core.core_access_options {
+                        probe_rs_target::CoreAccessOptions::Avr(opts) => {
+                            let mut desc = AvrChipDescriptor::from(opts);
+                            desc.name = chip.name.clone();
+                            Some(desc)
+                        }
+                        _ => None,
+                    })
             })
             .collect();
 

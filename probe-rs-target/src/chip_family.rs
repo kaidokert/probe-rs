@@ -138,6 +138,7 @@ impl InstructionSet {
             "arm" => Some(InstructionSet::A32),
             "aarch64" => Some(InstructionSet::A64),
             "xtensa" => Some(InstructionSet::Xtensa),
+            "avr" => Some(InstructionSet::Avr),
             other => {
                 if let Some(features) = other.strip_prefix("riscv32") {
                     if features.contains('c') {

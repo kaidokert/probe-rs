@@ -363,14 +363,12 @@ impl Registry {
 
                 for family in &self.families {
                     for chip in family.variants() {
-                        if let Some(core) = chip.cores.first() {
-                            if let probe_rs_target::CoreAccessOptions::Avr(opts) =
+                        if let Some(core) = chip.cores.first()
+                            && let probe_rs_target::CoreAccessOptions::Avr(opts) =
                                 &core.core_access_options
-                            {
-                                if opts.signature == avr_info.signature {
-                                    identified_chips.push((family, chip));
-                                }
-                            }
+                            && opts.signature == avr_info.signature
+                        {
+                            identified_chips.push((family, chip));
                         }
                     }
                 }

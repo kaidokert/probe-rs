@@ -20,9 +20,7 @@ use crate::{
     core::{Architecture, CombinedCoreState},
     probe::{
         AttachMethod, DebugProbeError, Probe, ProbeCreationError, WireProtocol,
-        cmsisdap::AvrChipDescriptor,
-        fake_probe::FakeProbe,
-        list::Lister,
+        cmsisdap::AvrChipDescriptor, fake_probe::FakeProbe, list::Lister,
     },
 };
 use std::ops::DerefMut;
@@ -230,9 +228,8 @@ impl Session {
         let chip = AvrChipDescriptor::from(avr_opts);
         // Extract a mutable CmsisDap reference from the probe for the UPDI interface.
         // The Probe is moved into the Session and the CmsisDap is accessed via downcast.
-        let interface = crate::probe::cmsisdap::avr_interface::OwnedCmsisDapUpdi::from_probe(
-            probe, chip,
-        )?;
+        let interface =
+            crate::probe::cmsisdap::avr_interface::OwnedCmsisDapUpdi::from_probe(probe, chip)?;
         Ok(Session {
             target,
             interfaces: ArchitectureInterface::Avr(Box::new(interface)),
@@ -847,9 +844,7 @@ impl Session {
     /// The caller is responsible for checking permissions before calling this method.
     pub fn erase_all(&mut self) -> Result<(), Error> {
         match &mut self.interfaces {
-            ArchitectureInterface::Avr(interface) => {
-                interface.erase_chip().map_err(Error::from)
-            }
+            ArchitectureInterface::Avr(interface) => interface.erase_chip().map_err(Error::from),
             _ => Err(Error::NotImplemented(
                 "Session erase-all is only implemented for AVR local sessions.",
             )),

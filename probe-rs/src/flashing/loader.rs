@@ -638,7 +638,9 @@ impl FlashLoader {
                 return self.verify_via_memory_interface(session);
             }
             Ok(algos) => algos,
-            Err(FlashError::NoFlashLoaderAlgorithmAttached { .. }) => {
+            Err(FlashError::NoFlashLoaderAlgorithmAttached { .. })
+                if !self.builder.data.is_empty() =>
+            {
                 return self.verify_via_memory_interface(session);
             }
             Err(e) => return Err(e),
@@ -696,7 +698,9 @@ impl FlashLoader {
                 return self.commit_via_memory_interface(session, &mut options);
             }
             Ok(algos) => algos,
-            Err(FlashError::NoFlashLoaderAlgorithmAttached { .. }) => {
+            Err(FlashError::NoFlashLoaderAlgorithmAttached { .. })
+                if !self.builder.data.is_empty() =>
+            {
                 return self.commit_via_memory_interface(session, &mut options);
             }
             Err(e) => return Err(e),
@@ -832,21 +836,15 @@ impl FlashLoader {
     }
 
     /// Verify flash data using direct memory reads via MemoryInterface.
-    fn verify_via_memory_interface(
-        &self,
-        session: &mut Session,
-    ) -> Result<(), FlashError> {
+    fn verify_via_memory_interface(&self, session: &mut Session) -> Result<(), FlashError> {
         tracing::info!("No flash algorithms — verifying via direct memory reads");
-        let mut core = session.core(0).map_err(|e| FlashError::FlashReadFailed {
-            source: Box::new(e),
-        })?;
+        let mut core = session.core(0).map_err(FlashError::Core)?;
         for (&address, data) in &self.builder.data {
             let mut readback = vec![0u8; data.len()];
-            core.read_8(address, &mut readback).map_err(|e| {
-                FlashError::FlashReadFailed {
+            core.read_8(address, &mut readback)
+                .map_err(|e| FlashError::FlashReadFailed {
                     source: Box::new(e),
-                }
-            })?;
+                })?;
             if readback != *data {
                 return Err(FlashError::Verify);
             }
@@ -886,9 +884,7 @@ impl FlashLoader {
         // Program: write each data block via MemoryInterface.
         options.progress.started_programming();
         {
-            let mut core = session.core(0).map_err(|e| FlashError::ChipEraseFailed {
-                source: Box::new(e),
-            })?;
+            let mut core = session.core(0).map_err(FlashError::Core)?;
             for (&address, data) in &self.builder.data {
                 tracing::debug!(
                     "  writing {:#010x}..{:#010x} ({} bytes)",
@@ -896,10 +892,11 @@ impl FlashLoader {
                     address + data.len() as u64,
                     data.len()
                 );
-                core.write_8(address, data).map_err(|e| FlashError::PageWrite {
-                    page_address: address,
-                    source: Box::new(e),
-                })?;
+                core.write_8(address, data)
+                    .map_err(|e| FlashError::PageWrite {
+                        page_address: address,
+                        source: Box::new(e),
+                    })?;
                 options
                     .progress
                     .page_programmed(data.len() as u64, std::time::Duration::ZERO);
@@ -910,16 +907,13 @@ impl FlashLoader {
         // Verify: read back and compare.
         if options.verify {
             tracing::info!("Verifying...");
-            let mut core = session.core(0).map_err(|e| FlashError::FlashReadFailed {
-                source: Box::new(e),
-            })?;
+            let mut core = session.core(0).map_err(FlashError::Core)?;
             for (&address, data) in &self.builder.data {
                 let mut readback = vec![0u8; data.len()];
-                core.read_8(address, &mut readback).map_err(|e| {
-                    FlashError::FlashReadFailed {
+                core.read_8(address, &mut readback)
+                    .map_err(|e| FlashError::FlashReadFailed {
                         source: Box::new(e),
-                    }
-                })?;
+                    })?;
                 if readback != *data {
                     return Err(FlashError::Verify);
                 }

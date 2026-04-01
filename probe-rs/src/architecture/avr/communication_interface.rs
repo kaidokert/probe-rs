@@ -4,8 +4,8 @@
 //! operations. Probe implementations (e.g. CMSIS-DAP) implement this trait
 //! to provide AVR support.
 
-use crate::probe::cmsisdap::{AvrChipDescriptor, AvrDebugState, AvrMemoryRegion};
 use crate::probe::DebugProbeError;
+use crate::probe::cmsisdap::{AvrChipDescriptor, AvrDebugState, AvrMemoryRegion};
 
 /// Transport-agnostic interface for AVR UPDI debug and programming operations.
 ///
