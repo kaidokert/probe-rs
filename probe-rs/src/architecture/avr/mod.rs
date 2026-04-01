@@ -249,8 +249,14 @@ impl<'probe> Avr<'probe> {
         // Program-space address (flash), byte-addressed.
         // Flash is memory-mapped in the data space at flash_base, so read it
         // via SRAM memtype at the data-space address.
-        let flash_base = self.interface.chip().flash_base;
-        Ok((DEBUG_MTYPE_SRAM, flash_base + addr))
+        let chip = self.interface.chip();
+        if addr >= chip.flash_size {
+            return Err(Error::Other(format!(
+                "AVR program address {addr:#010x} exceeds flash size ({:#010x})",
+                chip.flash_size
+            )));
+        }
+        Ok((DEBUG_MTYPE_SRAM, chip.flash_base + addr))
     }
 }
 

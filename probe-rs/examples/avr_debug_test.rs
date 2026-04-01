@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== Read PC ===");
-    let pc: u32 = match core.read_core_reg(RegisterId(32)) {
+    let pc: u32 = match core.read_core_reg(RegisterId(34)) {
         Ok(v) => {
             println!("  PC = {v:#010x}");
             v
@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== Read SREG ===");
-    let _: u32 = match core.read_core_reg(RegisterId(34)) {
+    let _: u32 = match core.read_core_reg(RegisterId(32)) {
         Ok(v) => {
             println!("  SREG = {v:#04x}");
             v

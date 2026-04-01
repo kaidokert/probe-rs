@@ -854,6 +854,9 @@ impl FlashLoader {
 
     /// Flash data using direct memory writes via MemoryInterface.
     ///
+    /// Uses core 0 for all writes — currently only AVR UPDI (single-core) uses
+    /// this path. Multi-core architectures would need per-region core selection.
+    ///
     /// This is used for architectures (like AVR UPDI) that don't have flash
     /// algorithms. The architecture's `write_8()` implementation handles the
     /// actual flash programming protocol.
