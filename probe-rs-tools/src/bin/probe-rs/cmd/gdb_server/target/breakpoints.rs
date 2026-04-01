@@ -32,8 +32,7 @@ impl HwBreakpoint for RuntimeTarget<'_> {
         for core_id in &self.cores {
             let mut core = session.core(*core_id).into_target_result()?;
 
-            core.set_hw_breakpoint(addr)
-                .into_target_result_non_fatal()?;
+            core.set_hw_breakpoint(addr).into_target_result()?;
         }
 
         Ok(true)
@@ -49,8 +48,7 @@ impl HwBreakpoint for RuntimeTarget<'_> {
         for core_id in &self.cores {
             let mut core = session.core(*core_id).into_target_result()?;
 
-            core.clear_hw_breakpoint(addr)
-                .into_target_result_non_fatal()?;
+            core.clear_hw_breakpoint(addr).into_target_result()?;
         }
 
         Ok(true)
