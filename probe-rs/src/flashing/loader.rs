@@ -808,6 +808,8 @@ impl FlashLoader {
         tracing::debug!("Committing RAM!");
 
         if let BootInfo::FromRam { cores_to_reset, .. } = self.boot_info() {
+            // If we are booting from RAM, it is important to reset and halt to guarantee a clear state
+            // Normally, flash algorithm loader performs reset and halt - does not happen here.
             tracing::debug!(
                 " -- action: vector table in RAM, assuming RAM boot, resetting and halting"
             );
@@ -826,7 +828,7 @@ impl FlashLoader {
             }
         }
 
-        // 3. RAM regions — committed last because NVM flashing may overwrite RAM.
+        // Commit RAM last, because NVM flashing overwrites RAM
         for region in self
             .memory_map
             .iter()
@@ -854,8 +856,12 @@ impl FlashLoader {
                 )
                 .unwrap();
 
+            // Attach to memory and core.
             let mut core = session.core(region_core_index).map_err(FlashError::Core)?;
 
+            // If this is a RAM only flash, the core might still be running. This can be
+            // problematic if the instruction RAM is flashed while an application is running, so
+            // the core is halted here in any case.
             if !core.core_halted().map_err(FlashError::Core)? {
                 tracing::debug!(
                     "     -- action: core is not halted and RAM is being written, halting"
@@ -871,6 +877,7 @@ impl FlashLoader {
                     address + data.len() as u64,
                     data.len()
                 );
+                // Write data to memory.
                 core.write(address, data).map_err(FlashError::Core)?;
             }
         }
