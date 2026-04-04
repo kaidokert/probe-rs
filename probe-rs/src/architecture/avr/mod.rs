@@ -314,7 +314,11 @@ impl MemoryInterface for Avr<'_> {
                 }
             };
             if bytes.len() < data.len() {
-                return Err(Error::Avr(AvrError::AddressOutOfRange { address }));
+                return Err(Error::Avr(AvrError::DataLengthMismatch {
+                    address,
+                    expected: data.len(),
+                    actual: bytes.len(),
+                }));
             }
             data.copy_from_slice(&bytes[..data.len()]);
             Ok(())
@@ -325,7 +329,11 @@ impl MemoryInterface for Avr<'_> {
                 .map_err(|_| Error::Avr(AvrError::AddressOutOfRange { address }))?;
             let bytes = self.interface.read_region(region, offset, length)?;
             if bytes.len() < data.len() {
-                return Err(Error::Avr(AvrError::AddressOutOfRange { address }));
+                return Err(Error::Avr(AvrError::DataLengthMismatch {
+                    address,
+                    expected: data.len(),
+                    actual: bytes.len(),
+                }));
             }
             data.copy_from_slice(&bytes[..data.len()]);
             Ok(())
@@ -510,8 +518,9 @@ impl CoreInterface for Avr<'_> {
 
     fn set_hw_breakpoint(&mut self, unit_index: usize, addr: u64) -> Result<(), Error> {
         if unit_index != 0 {
-            return Err(Error::Avr(AvrError::AddressOutOfRange {
-                address: unit_index as u64,
+            return Err(Error::Avr(AvrError::BreakpointUnitOutOfRange {
+                index: unit_index,
+                max: 0,
             }));
         }
         let addr32 = u32::try_from(addr)
@@ -525,8 +534,9 @@ impl CoreInterface for Avr<'_> {
 
     fn clear_hw_breakpoint(&mut self, unit_index: usize) -> Result<(), Error> {
         if unit_index != 0 {
-            return Err(Error::Avr(AvrError::AddressOutOfRange {
-                address: unit_index as u64,
+            return Err(Error::Avr(AvrError::BreakpointUnitOutOfRange {
+                index: unit_index,
+                max: 0,
             }));
         }
         self.interface

@@ -45,6 +45,24 @@ pub enum AvrError {
         /// The region that was targeted for writing.
         region: &'static str,
     },
+    /// Read returned fewer bytes than requested.
+    #[error("AVR read at {address:#010x} returned {actual} bytes, expected {expected}")]
+    DataLengthMismatch {
+        /// The address that was read.
+        address: u64,
+        /// The number of bytes expected.
+        expected: usize,
+        /// The number of bytes actually returned.
+        actual: usize,
+    },
+    /// Hardware breakpoint unit index out of range.
+    #[error("AVR breakpoint unit {index} out of range (max {max})")]
+    BreakpointUnitOutOfRange {
+        /// The requested breakpoint unit index.
+        index: usize,
+        /// The maximum supported unit index.
+        max: usize,
+    },
 }
 
 /// Transport-agnostic interface for AVR UPDI debug and programming operations.
