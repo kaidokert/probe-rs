@@ -7,6 +7,46 @@
 use crate::probe::DebugProbeError;
 use crate::probe::cmsisdap::{AvrChipDescriptor, AvrDebugState, AvrMemoryRegion};
 
+/// AVR-specific errors
+#[derive(thiserror::Error, Debug)]
+pub enum AvrError {
+    /// An error originating from the debug probe occurred.
+    #[error("Debug Probe Error")]
+    DebugProbe(#[from] DebugProbeError),
+    /// Address exceeds 32-bit AVR address space.
+    #[error("AVR address {address:#010x} out of range")]
+    AddressOutOfRange {
+        /// The address that was out of range.
+        address: u64,
+    },
+    /// Address does not map to any known memory region.
+    #[error("AVR address {address:#010x} not mapped to any memory region")]
+    AddressNotMapped {
+        /// The address that could not be mapped.
+        address: u64,
+    },
+    /// Address exceeds target flash size.
+    #[error("AVR program address {address:#010x} exceeds flash size {flash_size:#010x}")]
+    AddressBeyondFlash {
+        /// The program address that exceeded flash.
+        address: u32,
+        /// The flash size of the target.
+        flash_size: u32,
+    },
+    /// The requested register is not available.
+    #[error("AVR register {id} is not available")]
+    UnknownRegister {
+        /// The register ID that was requested.
+        id: u16,
+    },
+    /// Write to non-flash region is not supported.
+    #[error("AVR writes only support flash; {region} requires different EDBG commands")]
+    UnsupportedRegionWrite {
+        /// The region that was targeted for writing.
+        region: &'static str,
+    },
+}
+
 /// Transport-agnostic interface for AVR UPDI debug and programming operations.
 ///
 /// Implementations encapsulate the probe transport, chip descriptor, and debug
