@@ -480,9 +480,9 @@ impl CoreInterface for Avr<'_> {
         match id {
             0..=31 => {
                 let regs = self.interface.read_registers().map_err(AvrError::from)?;
-                let val = *regs.get(id as usize).ok_or(Error::Avr(
-                    AvrError::UnknownRegister { id },
-                ))?;
+                let val = *regs
+                    .get(id as usize)
+                    .ok_or(Error::Avr(AvrError::UnknownRegister { id }))?;
                 Ok(RegisterValue::U32(val as u32))
             }
             32 => {
