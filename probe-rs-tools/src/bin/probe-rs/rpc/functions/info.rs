@@ -514,9 +514,15 @@ async fn try_read_avr_info(
             })
             .collect();
 
+        let probe_name = probe.get_name();
         let cmsis: &mut CmsisDap = Probe::try_into(probe)
             .ok_or_else(|| anyhow::anyhow!("UPDI info requires a CMSIS-DAP probe"))?;
         let info = query_attached_pkobn_updi(cmsis, &avr_chips)?;
+        ctx.publish::<TargetInfoDataTopic>(
+            VarSeq::Seq2(0),
+            &InfoEvent::Message(format!("Probe: {probe_name}")),
+        )
+        .await?;
         for line in info.format_info_lines() {
             ctx.publish::<TargetInfoDataTopic>(VarSeq::Seq2(0), &InfoEvent::Message(line))
                 .await?;
