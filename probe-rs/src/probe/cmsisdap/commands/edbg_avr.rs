@@ -748,11 +748,15 @@ impl<'a> EdbgAvrTransport<'a> {
                                 "EDBG AVR: all-FF signature with {}, trying next descriptor",
                                 chip.name
                             );
-                            let _ = self.leave_progmode();
-                            let _ = self.command(
-                                &[SCOPE_AVR, CMD3_SIGN_OFF, 0],
-                                "AVR sign-off (FF retry)",
-                            );
+                            if let Err(e) = self.leave_progmode() {
+                                tracing::debug!("EDBG AVR: leave_progmode during FF retry: {e}");
+                            }
+                            if let Err(e) = self
+                                .command(&[SCOPE_AVR, CMD3_SIGN_OFF, 0], "AVR sign-off (FF retry)")
+                            {
+                                tracing::debug!("EDBG AVR: sign-off during FF retry: {e}");
+                            }
+                            self.programming_enabled = false;
                             self.avr_signed_on = false;
                             continue;
                         }
