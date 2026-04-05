@@ -740,6 +740,23 @@ impl<'a> EdbgAvrTransport<'a> {
                             self.chip.signature[1],
                             self.chip.signature[2],
                         );
+
+                        // All-FF signature means the descriptor doesn't match the
+                        // target — sign off and try the next descriptor.
+                        if signature == [0xFF, 0xFF, 0xFF] {
+                            tracing::debug!(
+                                "EDBG AVR: all-FF signature with {}, trying next descriptor",
+                                chip.name
+                            );
+                            let _ = self.leave_progmode();
+                            let _ = self.command(
+                                &[SCOPE_AVR, CMD3_SIGN_OFF, 0],
+                                "AVR sign-off (FF retry)",
+                            );
+                            self.avr_signed_on = false;
+                            continue;
+                        }
+
                         let actual_chip = chips
                             .iter()
                             .find(|c| c.signature == signature)
