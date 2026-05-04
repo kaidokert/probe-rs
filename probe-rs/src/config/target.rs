@@ -119,6 +119,7 @@ impl Target {
                 Architecture::Arm => DebugSequence::Arm(DefaultArmSequence::create()),
                 Architecture::Riscv => DebugSequence::Riscv(DefaultRiscvSequence::create()),
                 Architecture::Xtensa => DebugSequence::Xtensa(DefaultXtensaSequence::create()),
+                Architecture::Avr => DebugSequence::Avr(()),
             }
         });
 
@@ -267,6 +268,9 @@ pub enum DebugSequence {
     Riscv(Arc<dyn RiscvDebugSequence>),
     /// An Xtensa debug sequence.
     Xtensa(Arc<dyn XtensaDebugSequence>),
+    /// AVR debug sequence placeholder.
+    // AVR UPDI debug operations go through OCD via UpdiInterface, not debug sequences.
+    Avr(()),
 }
 
 impl DebugSequence {
@@ -279,6 +283,7 @@ impl DebugSequence {
             DebugSequence::Arm(seq) => seq.debug_flash_sequence(),
             DebugSequence::Riscv(seq) => seq.debug_flash_sequence(),
             DebugSequence::Xtensa(seq) => seq.debug_flash_sequence(),
+            DebugSequence::Avr(()) => None,
         }
     }
 }
@@ -308,6 +313,7 @@ impl CoreExt for Core {
             }
             probe_rs_target::CoreAccessOptions::Riscv(_) => None,
             probe_rs_target::CoreAccessOptions::Xtensa(_) => None,
+            probe_rs_target::CoreAccessOptions::Avr(_) => None,
         }
     }
 }

@@ -176,6 +176,11 @@ impl FlashAlgorithm {
             },
             CoreType::Riscv | CoreType::Riscv64 => &Self::RISCV_FLASH_BLOB_HEADER,
             CoreType::Xtensa => &Self::XTENSA_FLASH_BLOB_HEADER,
+            CoreType::Avr => {
+                // AVR does not use flash algorithms — programming is done
+                // via the EDBG transport, not via on-chip flash loaders.
+                &[]
+            }
         }
     }
 
@@ -184,6 +189,7 @@ impl FlashAlgorithm {
             Architecture::Arm => 8,
             Architecture::Riscv => 16,
             Architecture::Xtensa => 16,
+            Architecture::Avr => 1,
         }
     }
 

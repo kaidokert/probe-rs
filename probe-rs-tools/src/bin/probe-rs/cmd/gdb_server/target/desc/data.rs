@@ -71,6 +71,7 @@ impl TargetDescription {
             CoreType::Riscv => "riscv:rv32",
             CoreType::Riscv64 => "riscv:rv64",
             CoreType::Xtensa => "xtensa",
+            CoreType::Avr => "avr",
         };
 
         Self {
@@ -220,6 +221,8 @@ impl TargetDescription {
 
 fn size_to_type(size: usize) -> &'static str {
     match size {
+        8 => "uint8",
+        16 => "uint16",
         32 => "uint32",
         64 => "uint64",
         128 => "uint128",
@@ -247,6 +250,11 @@ pub fn build_target_description(
         },
         CoreType::Riscv | CoreType::Riscv64 => build_riscv_registers(&mut desc, regs),
         CoreType::Xtensa => build_xtensa_registers(&mut desc, regs),
+        CoreType::Avr => {
+            // AVR has no debug registers — GDB target description is minimal/empty.
+            desc.add_gdb_feature("org.gnu.gdb.avr.cpu");
+            desc.add_registers(regs.core_registers());
+        }
     };
 
     desc
