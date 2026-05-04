@@ -713,7 +713,7 @@ impl ResolvedCoreOptions {
             (CoreAccessOptions::Xtensa(options), DebugSequence::Xtensa(sequence)) => {
                 Self::Xtensa { sequence, options }
             }
-            (CoreAccessOptions::Avr(_), DebugSequence::Avr(())) => Self::Avr,
+            (CoreAccessOptions::Avr(_), DebugSequence::Avr(_)) => Self::Avr,
             _ => unreachable!(
                 "Mismatch between core kind and access options. This is a bug, please report it."
             ),

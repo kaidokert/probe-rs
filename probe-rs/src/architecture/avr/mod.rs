@@ -5,7 +5,9 @@
 //! (halt, step, breakpoints, register reads).
 
 pub mod communication_interface;
+pub mod flash_sequence;
 pub use communication_interface::{AvrError, UpdiInterface};
+pub use flash_sequence::AvrFlashSequence;
 
 use crate::{
     CoreInterface, CoreRegister, CoreStatus, CoreType, Error, MemoryInterface,

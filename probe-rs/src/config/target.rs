@@ -119,7 +119,9 @@ impl Target {
                 Architecture::Arm => DebugSequence::Arm(DefaultArmSequence::create()),
                 Architecture::Riscv => DebugSequence::Riscv(DefaultRiscvSequence::create()),
                 Architecture::Xtensa => DebugSequence::Xtensa(DefaultXtensaSequence::create()),
-                Architecture::Avr => DebugSequence::Avr(()),
+                Architecture::Avr => {
+                    DebugSequence::Avr(Arc::new(crate::architecture::avr::AvrFlashSequence::new()))
+                }
             }
         });
 
@@ -259,7 +261,7 @@ impl From<Target> for TargetSelector {
 }
 
 /// This is the type to denote a general debug sequence.
-/// It can differentiate between ARM, RISC-V and Xtensa for now.
+/// It can differentiate between ARM, RISC-V, Xtensa and AVR.
 #[derive(Clone, Debug)]
 pub enum DebugSequence {
     /// An ARM debug sequence.
@@ -268,9 +270,9 @@ pub enum DebugSequence {
     Riscv(Arc<dyn RiscvDebugSequence>),
     /// An Xtensa debug sequence.
     Xtensa(Arc<dyn XtensaDebugSequence>),
-    /// AVR debug sequence placeholder.
-    // AVR UPDI debug operations go through OCD via UpdiInterface, not debug sequences.
-    Avr(()),
+    /// AVR sequence — only carries the host-side flash sequence; AVR UPDI debug
+    /// operations go through `UpdiInterface` directly, not through the sequence.
+    Avr(Arc<crate::architecture::avr::AvrFlashSequence>),
 }
 
 impl DebugSequence {
@@ -283,7 +285,7 @@ impl DebugSequence {
             DebugSequence::Arm(seq) => seq.debug_flash_sequence(),
             DebugSequence::Riscv(seq) => seq.debug_flash_sequence(),
             DebugSequence::Xtensa(seq) => seq.debug_flash_sequence(),
-            DebugSequence::Avr(()) => None,
+            DebugSequence::Avr(seq) => Some(seq.clone() as Arc<dyn DebugFlashSequence>),
         }
     }
 }

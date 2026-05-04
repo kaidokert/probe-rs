@@ -78,7 +78,7 @@ variants:
       start: 0x801100
       end: 0x801140
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-16k-p64]
 
 - name: ATtiny3217
   cores:
@@ -150,7 +150,7 @@ variants:
       start: 0x801100
       end: 0x801140
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-32k-p128]
 
 - name: ATtiny3227
   cores:
@@ -222,7 +222,7 @@ variants:
       start: 0x801100
       end: 0x801140
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-32k-p128]
 
 # ---- megaAVR (avr8x_mega family) ----
 # Shared: fuses 10B@0x1280, lock 1B@0x128A, userrow 64B@0x1300,
@@ -298,7 +298,7 @@ variants:
       start: 0x801100
       end: 0x801180
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-48k-p128]
 
 # ---- AVR DA/DB (avr-da-db family) ----
 # Shared: fuses 16B@0x1050, lock 4B@0x1040, userrow 32B@0x1080,
@@ -374,7 +374,7 @@ variants:
       start: 0x801100
       end: 0x801180
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-128k-p512]
 
 - name: AVR128DB48
   cores:
@@ -446,7 +446,7 @@ variants:
       start: 0x801100
       end: 0x801180
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-128k-p512]
 
 # ---- AVR DD (avr-dd-du family) ----
 # Shared: fuses 16B@0x1050, lock 4B@0x1040, userrow 32B@0x1080,
@@ -522,7 +522,7 @@ variants:
       start: 0x801100
       end: 0x801180
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-64k-p512]
 
 # ---- AVR DU (avr-dd-du family, USB) ----
 # Differs from DD: fuses 12B, userrow 512B@0x1200, signature_base=0x1080,
@@ -598,7 +598,7 @@ variants:
       start: 0x801080
       end: 0x8010C0
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-64k-p512]
 
 # ---- AVR EA (avr-ex family) ----
 # Shared: fuses 16B@0x1050, lock 4B@0x1040, userrow 32B@0x1080,
@@ -674,7 +674,7 @@ variants:
       start: 0x801100
       end: 0x801180
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-64k-p128]
 
 # ---- AVR EB (avr-ex family) ----
 # Differs from EA: eeprom 512B page 8, userrow 512B@0x1200,
@@ -750,7 +750,7 @@ variants:
       start: 0x801080
       end: 0x801100
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-16k-p64]
 
 # ---- AVR SD (avr-sx family, Security) ----
 # Shared: fuses 16B@0x1050, lock 4B@0x1040, userrow 512B@0x1200,
@@ -826,4 +826,97 @@ variants:
       start: 0x801080
       end: 0x801100
     cores: [main]
-  flash_algorithms: []
+  flash_algorithms: [avr-updi-32k-p512]
+
+# Host-side UPDI flash algorithms.
+# `flash_loader_type: host_side` routes programming through `AvrFlashSequence`
+# (probe-rs/src/architecture/avr/flash_sequence.rs), which drives UPDI page-write
+# commands via the AVR `MemoryInterface`. There is no on-chip algorithm.
+#
+# `sector.size` doubles as the page programming granularity (see
+# `host_flasher::region_flash_props`); set it equal to the chip's UPDI page size.
+flash_algorithms:
+- name: avr-updi-16k-p64
+  description: AVR UPDI host-side flash, 16 KiB / 64 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0x4000 }
+    page_size: 64
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 64, address: 0 }
+  cores: [main]
+- name: avr-updi-32k-p128
+  description: AVR UPDI host-side flash, 32 KiB / 128 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0x8000 }
+    page_size: 128
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 128, address: 0 }
+  cores: [main]
+- name: avr-updi-32k-p512
+  description: AVR UPDI host-side flash, 32 KiB / 512 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0x8000 }
+    page_size: 512
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 512, address: 0 }
+  cores: [main]
+- name: avr-updi-48k-p128
+  description: AVR UPDI host-side flash, 48 KiB / 128 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0xC000 }
+    page_size: 128
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 128, address: 0 }
+  cores: [main]
+- name: avr-updi-64k-p128
+  description: AVR UPDI host-side flash, 64 KiB / 128 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0x10000 }
+    page_size: 128
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 128, address: 0 }
+  cores: [main]
+- name: avr-updi-64k-p512
+  description: AVR UPDI host-side flash, 64 KiB / 512 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0x10000 }
+    page_size: 512
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 512, address: 0 }
+  cores: [main]
+- name: avr-updi-128k-p512
+  description: AVR UPDI host-side flash, 128 KiB / 512 B page
+  flash_loader_type: host_side
+  flash_properties:
+    address_range: { start: 0x0, end: 0x20000 }
+    page_size: 512
+    erased_byte_value: 0xff
+    program_page_timeout: 1000
+    erase_sector_timeout: 1000
+    sectors:
+    - { size: 512, address: 0 }
+  cores: [main]
