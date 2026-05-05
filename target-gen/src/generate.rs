@@ -161,6 +161,16 @@ where
             .map(create_core)
             .collect::<Result<Vec<_>>>()?;
 
+        // Skip devices whose cores aren't supported by target-gen (e.g. AVR);
+        // a single unsupported core shouldn't drop sibling targets in the same pack.
+        let cores = match cores.into_iter().collect::<Option<Vec<_>>>() {
+            Some(cores) => cores,
+            None => {
+                log::warn!("Skipping {device_name}: contains an unsupported core.");
+                continue;
+            }
+        };
+
         let mut memory_map = get_mem_map(&device, &cores);
         patch_memmap(&mut memory_map);
 
@@ -193,38 +203,43 @@ fn try_parse_vendor(vendor: Option<&str>) -> Option<JEP106Code> {
     Some(jep)
 }
 
-fn create_core(processor: &Processor) -> Result<ProbeCore> {
+fn create_core(processor: &Processor) -> Result<Option<ProbeCore>> {
     let core_type = core_to_probe_core(&processor.core)?;
-    Ok(ProbeCore {
+    let core_access_options = match core_type.architecture() {
+        Architecture::Arm => CoreAccessOptions::Arm(ArmCoreAccessOptions {
+            ap: match processor.ap {
+                AccessPort::Index(id) => probe_rs_target::ApAddress::V1(id),
+                AccessPort::Address(addr) => probe_rs_target::ApAddress::V2(addr),
+            },
+            targetsel: None,
+            debug_base: None,
+            cti_base: None,
+            jtag_tap: None,
+        }),
+        Architecture::Riscv => CoreAccessOptions::Riscv(RiscvCoreAccessOptions {
+            hart_id: None,
+            jtag_tap: None,
+        }),
+        Architecture::Xtensa => {
+            CoreAccessOptions::Xtensa(XtensaCoreAccessOptions { jtag_tap: None })
+        }
+        Architecture::Avr => {
+            // AVR targets aren't extracted from CMSIS packs (definitions live in
+            // probe-rs/targets/AVR.yaml). Returning None lets the caller skip the
+            // device without aborting the whole pack.
+            log::warn!("target-gen does not support AVR cores; skipping.");
+            return Ok(None);
+        }
+    };
+    Ok(Some(ProbeCore {
         name: processor
             .name
             .as_ref()
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_else(|| "main".to_string()),
         core_type,
-        core_access_options: match core_type.architecture() {
-            Architecture::Arm => CoreAccessOptions::Arm(ArmCoreAccessOptions {
-                ap: match processor.ap {
-                    AccessPort::Index(id) => probe_rs_target::ApAddress::V1(id),
-                    AccessPort::Address(addr) => probe_rs_target::ApAddress::V2(addr),
-                },
-                targetsel: None,
-                debug_base: None,
-                cti_base: None,
-                jtag_tap: None,
-            }),
-            Architecture::Riscv => CoreAccessOptions::Riscv(RiscvCoreAccessOptions {
-                hart_id: None,
-                jtag_tap: None,
-            }),
-            Architecture::Xtensa => {
-                CoreAccessOptions::Xtensa(XtensaCoreAccessOptions { jtag_tap: None })
-            }
-            Architecture::Avr => {
-                anyhow::bail!("target-gen does not support AVR cores")
-            }
-        },
-    })
+        core_access_options,
+    }))
 }
 
 fn core_to_probe_core(value: &Core) -> Result<CoreType, Error> {

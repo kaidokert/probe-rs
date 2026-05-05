@@ -444,7 +444,7 @@ fn erase_impl(
         EraseCommand::All if session.architecture() == Architecture::Avr => {
             if request.read_flasher_rtt {
                 return Err(anyhow::anyhow!(
-                    "'erase --protocol updi' does not support '--read-flasher-rtt'."
+                    "Flasher RTT is not supported on AVR UPDI targets."
                 )
                 .into());
             }

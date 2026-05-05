@@ -1945,6 +1945,7 @@ pub fn debug_avr_cleanup(
     state.avr_signed_on = false;
     state.general_signed_on = false;
     state.command_sequence = 0;
+    state.hw_breakpoint = None;
     Ok(())
 }
 

@@ -373,7 +373,7 @@ async fn try_show_info(
                 }
             }
         }
-    } else {
+    } else if protocol != WireProtocol::Updi {
         ctx.publish::<TargetInfoDataTopic>(
             VarSeq::Seq2(0),
             &InfoEvent::ProbeInterfaceMissing {
@@ -441,7 +441,7 @@ async fn try_read_riscv_info(
             },
         )
         .await?;
-    } else {
+    } else if protocol != WireProtocol::Updi {
         ctx.publish::<TargetInfoDataTopic>(
             VarSeq::Seq2(0),
             &InfoEvent::ProbeInterfaceMissing {
@@ -475,7 +475,7 @@ async fn try_read_xtensa_info(
             },
         )
         .await?;
-    } else {
+    } else if protocol != WireProtocol::Updi {
         ctx.publish::<TargetInfoDataTopic>(
             VarSeq::Seq2(0),
             &InfoEvent::ProbeInterfaceMissing {

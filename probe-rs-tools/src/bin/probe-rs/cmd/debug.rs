@@ -246,6 +246,9 @@ impl Cmd {
 
         // Determine if this is a launch or attach session
         let session_command = if self.launch { "launch" } else { "attach" };
+        // TODO: each subcommand currently rejects UPDI on its own (see also
+        // `cmd/erase.rs`); a shared helper for protocol-vs-command compatibility
+        // would let us drop these duplicated checks.
         let wire_protocol = match self.common.protocol {
             Some(probe_rs::probe::WireProtocol::Updi) => {
                 anyhow::bail!("The protocol 'UPDI' is not supported by this command.")
