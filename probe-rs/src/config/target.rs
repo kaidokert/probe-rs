@@ -9,6 +9,7 @@ use crate::{
         riscv::sequences::{DefaultRiscvSequence, RiscvDebugSequence},
         xtensa::sequences::{DefaultXtensaSequence, XtensaDebugSequence},
     },
+    flashing::DebugFlashSequence,
     rtt::ScanRegion,
 };
 use probe_rs_target::{
@@ -118,6 +119,9 @@ impl Target {
                 Architecture::Arm => DebugSequence::Arm(DefaultArmSequence::create()),
                 Architecture::Riscv => DebugSequence::Riscv(DefaultRiscvSequence::create()),
                 Architecture::Xtensa => DebugSequence::Xtensa(DefaultXtensaSequence::create()),
+                Architecture::Avr => {
+                    DebugSequence::Avr(Arc::new(crate::architecture::avr::AvrFlashSequence::new()))
+                }
             }
         });
 
@@ -257,7 +261,7 @@ impl From<Target> for TargetSelector {
 }
 
 /// This is the type to denote a general debug sequence.
-/// It can differentiate between ARM, RISC-V and Xtensa for now.
+/// It can differentiate between ARM, RISC-V, Xtensa and AVR.
 #[derive(Clone, Debug)]
 pub enum DebugSequence {
     /// An ARM debug sequence.
@@ -266,6 +270,24 @@ pub enum DebugSequence {
     Riscv(Arc<dyn RiscvDebugSequence>),
     /// An Xtensa debug sequence.
     Xtensa(Arc<dyn XtensaDebugSequence>),
+    /// AVR sequence — only carries the host-side flash sequence; AVR UPDI debug
+    /// operations go through `UpdiInterface` directly, not through the sequence.
+    Avr(Arc<crate::architecture::avr::AvrFlashSequence>),
+}
+
+impl DebugSequence {
+    /// Return the host-side flash sequence for this target, if one is registered.
+    ///
+    /// This delegates to the architecture-specific sequence method, providing a
+    /// single architecture-agnostic entry point for the flash loader.
+    pub fn debug_flash_sequence(&self) -> Option<Arc<dyn DebugFlashSequence>> {
+        match self {
+            DebugSequence::Arm(seq) => seq.debug_flash_sequence(),
+            DebugSequence::Riscv(seq) => seq.debug_flash_sequence(),
+            DebugSequence::Xtensa(seq) => seq.debug_flash_sequence(),
+            DebugSequence::Avr(seq) => Some(seq.clone() as Arc<dyn DebugFlashSequence>),
+        }
+    }
 }
 
 pub(crate) trait CoreExt {
@@ -293,6 +315,7 @@ impl CoreExt for Core {
             }
             probe_rs_target::CoreAccessOptions::Riscv(_) => None,
             probe_rs_target::CoreAccessOptions::Xtensa(_) => None,
+            probe_rs_target::CoreAccessOptions::Avr(_) => None,
         }
     }
 }

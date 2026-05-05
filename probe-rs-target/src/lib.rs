@@ -19,13 +19,13 @@ mod memory;
 pub(crate) mod serialize;
 
 pub use chip::{
-    ApAddress, ArmCoreAccessOptions, Chip, Core, CoreAccessOptions, Jtag, RiscvCoreAccessOptions,
-    RiscvJtagTunnel, ScanChainElement, XtensaCoreAccessOptions,
+    ApAddress, ArmCoreAccessOptions, AvrCoreAccessOptions, Chip, Core, CoreAccessOptions, Jtag,
+    RiscvCoreAccessOptions, RiscvJtagTunnel, ScanChainElement, XtensaCoreAccessOptions,
 };
 pub use chip_family::{
     Architecture, ChipFamily, CoreType, Endian, InstructionSet, TargetDescriptionSource,
 };
-pub use flash_algorithm::{RawFlashAlgorithm, TransferEncoding};
+pub use flash_algorithm::{FlashLoaderType, RawFlashAlgorithm, TransferEncoding};
 pub use flash_properties::FlashProperties;
 pub use memory::{
     GenericRegion, MemoryAccess, MemoryRange, MemoryRegion, NvmRegion, PageInfo, RamRegion,

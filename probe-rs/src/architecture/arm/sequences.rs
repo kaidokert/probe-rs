@@ -10,6 +10,8 @@ use std::{
 
 use probe_rs_target::CoreType;
 
+pub use crate::flashing::DebugFlashSequence;
+
 use crate::{
     MemoryInterface, MemoryMappedRegister,
     architecture::arm::{
@@ -593,6 +595,12 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
                         // -> done in debug_port_connect
                     }
                 }
+                Some(WireProtocol::Updi) => {
+                    return Err(ArmDebugSequenceError::SequenceSpecific(
+                        "UPDI is not supported by ARM debug port setup".into(),
+                    )
+                    .into());
+                }
                 _ => {
                     return Err(ArmDebugSequenceError::SequenceSpecific(
                         "Cannot detect current protocol".into(),
@@ -964,6 +972,12 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
             Some(WireProtocol::Swd) => {
                 tracing::debug!("SWD: Connecting to debug port with address {:x?}", dp);
             }
+            Some(WireProtocol::Updi) => {
+                return Err(ArmDebugSequenceError::SequenceSpecific(
+                    "UPDI is not supported by ARM debug sequences".into(),
+                )
+                .into());
+            }
             None => {
                 return Err(ArmDebugSequenceError::SequenceSpecific(
                     "Cannot detect current protocol".into(),
@@ -1135,6 +1149,15 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
 
     /// Return the Debug Erase Sequence implementation if it exists
     fn debug_erase_sequence(&self) -> Option<Arc<dyn DebugEraseSequence>> {
+        None
+    }
+
+    /// Return the Debug Flash Sequence implementation if it exists.
+    ///
+    /// This is used for host-side flash programming where the flash
+    /// operations are performed from the host via debug interface commands
+    /// rather than a RAM-based flash algorithm.
+    fn debug_flash_sequence(&self) -> Option<Arc<dyn DebugFlashSequence>> {
         None
     }
 
