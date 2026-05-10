@@ -511,6 +511,7 @@ fn is_known_cmsis_dap_dev(device: &DeviceInfo) -> bool {
 fn hid_report_size(device: &hidapi::DeviceInfo) -> usize {
     // EDBG are 512-bytes and don't respond until you give them 512 bytes.
     if device.vendor_id() == 0x03eb
+        && device.product_id() != 0x2175
         && let Some(s) = device.product_string()
         && s.contains("EDBG")
     {
