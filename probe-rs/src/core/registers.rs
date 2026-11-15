@@ -479,6 +479,30 @@ impl CoreRegisters {
         CoreRegisters(core_registers)
     }
 
+    /// Select the ARMv8-M register file from the live core's extensions.
+    ///
+    /// Core type alone does not distinguish the Main and Security extensions.
+    pub fn for_armv8m(main: bool, security: bool, fp: bool) -> &'static CoreRegisters {
+        use crate::architecture::arm::core::registers::armv8m::{
+            V8M_BASE_SEC_FP_REGISTERS, V8M_BASE_SEC_REGISTERS, V8M_MAIN_FP_REGISTERS,
+            V8M_MAIN_REGISTERS, V8M_MAIN_SEC_FP_REGISTERS, V8M_MAIN_SEC_REGISTERS,
+        };
+        use crate::architecture::arm::core::registers::cortex_m::{
+            CORTEX_M_CORE_REGISTERS, CORTEX_M_WITH_FP_CORE_REGISTERS,
+        };
+
+        match (main, security, fp) {
+            (true, true, true) => &V8M_MAIN_SEC_FP_REGISTERS,
+            (true, true, false) => &V8M_MAIN_SEC_REGISTERS,
+            (true, false, true) => &V8M_MAIN_FP_REGISTERS,
+            (true, false, false) => &V8M_MAIN_REGISTERS,
+            (false, true, true) => &V8M_BASE_SEC_FP_REGISTERS,
+            (false, true, false) => &V8M_BASE_SEC_REGISTERS,
+            (false, false, true) => &CORTEX_M_WITH_FP_CORE_REGISTERS,
+            (false, false, false) => &CORTEX_M_CORE_REGISTERS,
+        }
+    }
+
     /// Return the register file that applies to the given [`CoreType`].
     ///
     /// Use this when an architecture-specific register file is needed but no

@@ -3,13 +3,7 @@
 use super::{
     CortexMState, Dfsr,
     cortex_m::{IdPfr1, Mvfr0, clear_step_before_reset, exit_halt},
-    registers::armv8m::{
-        V8M_BASE_SEC_FP_REGISTERS, V8M_BASE_SEC_REGISTERS, V8M_MAIN_FP_REGISTERS,
-        V8M_MAIN_REGISTERS, V8M_MAIN_SEC_FP_REGISTERS, V8M_MAIN_SEC_REGISTERS,
-    },
-    registers::cortex_m::{
-        CORTEX_M_CORE_REGISTERS, CORTEX_M_WITH_FP_CORE_REGISTERS, FP, PC, RA, SP,
-    },
+    registers::cortex_m::{FP, PC, RA, SP},
 };
 use crate::{
     Architecture, BreakpointCause, CoreInformation, CoreInterface, CoreRegister, CoreStatus,
@@ -482,16 +476,7 @@ impl CoreInterface for Armv8m<'_> {
         let security = self.security;
         let fp = self.state.fp_present;
 
-        match (main, security, fp) {
-            (true, true, true) => &V8M_MAIN_SEC_FP_REGISTERS,
-            (true, true, false) => &V8M_MAIN_SEC_REGISTERS,
-            (true, false, true) => &V8M_MAIN_FP_REGISTERS,
-            (true, false, false) => &V8M_MAIN_REGISTERS,
-            (false, true, true) => &V8M_BASE_SEC_FP_REGISTERS,
-            (false, true, false) => &V8M_BASE_SEC_REGISTERS,
-            (false, false, true) => &CORTEX_M_WITH_FP_CORE_REGISTERS,
-            (false, false, false) => &CORTEX_M_CORE_REGISTERS,
-        }
+        CoreRegisters::for_armv8m(main, security, fp)
     }
 
     fn program_counter(&self) -> &'static CoreRegister {

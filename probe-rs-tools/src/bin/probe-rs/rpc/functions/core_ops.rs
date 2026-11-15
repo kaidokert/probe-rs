@@ -8,9 +8,9 @@ use probe_rs_rpc::core_ops::{
     CoreAccessRequest, CoreBreakpointsRequest, CoreDumpRequest, CoreHaltRequest,
     CoreReadRegistersRequest, CoreVectorCatchRequest, CoreWriteRegRequest,
     HandleSemihostingRequest, HandleSemihostingResponse, HandleSemihostingResult, StepRequest,
-    StepResponse, StepResult, WireBreakpointCause, WireCoreDump, WireCoreInformation,
-    WireCoreMetadata, WireCoreStatus, WireCoreType, WireExitErrorDetails, WireHaltReason,
-    WireInstructionSet, WireRegisterId, WireRegisterReadResult, WireRegisterValue,
+    StepResponse, StepResult, WireArmv8mFeatures, WireBreakpointCause, WireCoreDump,
+    WireCoreInformation, WireCoreMetadata, WireCoreStatus, WireCoreType, WireExitErrorDetails,
+    WireHaltReason, WireInstructionSet, WireRegisterId, WireRegisterReadResult, WireRegisterValue,
     WireSemihostingCommand, WireSemihostingUiEvent, WireSteppingMode, WireVectorCatchCondition,
     WireXlen,
 };
@@ -222,6 +222,7 @@ pub async fn core_metadata(
             fpu_support,
             floating_point_register_count,
             instruction_set,
+            armv8m_features: convert::armv8m_features(core.core_type(), core.registers()),
         }
     });
     Ok(metadata)
@@ -468,6 +469,37 @@ pub(crate) mod convert {
         semihosting::{ExitErrorDetails, SemihostingCommand, UnknownCommandDetails},
     };
     use probe_rs_debug::SteppingMode;
+
+    pub(crate) fn armv8m_features(
+        core_type: probe_rs::CoreType,
+        registers: &probe_rs::CoreRegisters,
+    ) -> Option<super::WireArmv8mFeatures> {
+        (core_type == probe_rs::CoreType::Armv8m).then(|| super::WireArmv8mFeatures {
+            main_extension: registers.other_by_name("MSPLIM_NS").is_some(),
+            security_extension: registers.other_by_name("MSP_S").is_some(),
+        })
+    }
+
+    pub(crate) fn core_registers_from_metadata(
+        core_type: probe_rs::CoreType,
+        metadata: &super::WireCoreMetadata,
+    ) -> &'static probe_rs::CoreRegisters {
+        if core_type == probe_rs::CoreType::Armv8m
+            && let Some(features) = metadata.armv8m_features
+        {
+            return probe_rs::CoreRegisters::for_armv8m(
+                features.main_extension,
+                features.security_extension,
+                metadata.fpu_support,
+            );
+        }
+        probe_rs::CoreRegisters::for_core_type(
+            core_type,
+            metadata.fpu_support,
+            metadata.floating_point_register_count.map(|n| n as usize),
+            Some(from_wire_instruction_set(metadata.instruction_set)),
+        )
+    }
 
     pub(crate) fn to_wire_register_id(value: RegisterId) -> WireRegisterId {
         WireRegisterId(value.0)
@@ -726,6 +758,56 @@ pub(crate) mod convert {
             WireCoreType::Riscv => probe_rs::CoreType::Riscv,
             WireCoreType::Riscv64 => probe_rs::CoreType::Riscv64,
             WireCoreType::Xtensa => probe_rs::CoreType::Xtensa,
+        }
+    }
+
+    #[cfg(test)]
+    mod register_metadata_tests {
+        use super::{armv8m_features, core_registers_from_metadata};
+        use probe_rs::{CoreRegisters, CoreType, RegisterRole};
+        use probe_rs_rpc::core_ops::{WireCoreMetadata, WireInstructionSet};
+
+        #[test]
+        fn armv8m_live_register_file_survives_rpc_metadata() {
+            for main in [false, true] {
+                for security in [false, true] {
+                    for fp in [false, true] {
+                        let native = CoreRegisters::for_armv8m(main, security, fp);
+                        let metadata = WireCoreMetadata {
+                            fpu_support: fp,
+                            floating_point_register_count: fp.then_some(32),
+                            instruction_set: WireInstructionSet::Thumb2,
+                            armv8m_features: armv8m_features(CoreType::Armv8m, native),
+                        };
+                        let remote = core_registers_from_metadata(CoreType::Armv8m, &metadata);
+                        assert_eq!(remote, native);
+                        assert_eq!(remote.other_by_name("MSP_S").is_some(), security);
+                        assert_eq!(remote.other_by_name("MSPLIM_NS").is_some(), main);
+                        assert_eq!(
+                            remote
+                                .all_registers()
+                                .any(|r| r.register_has_role(RegisterRole::FloatingPoint)),
+                            fp
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn other_architectures_keep_their_existing_register_file() {
+            let native = CoreRegisters::for_core_type(CoreType::Armv7em, true, Some(32), None);
+            let metadata = WireCoreMetadata {
+                fpu_support: true,
+                floating_point_register_count: Some(32),
+                instruction_set: WireInstructionSet::Thumb2,
+                armv8m_features: armv8m_features(CoreType::Armv7em, native),
+            };
+            assert!(metadata.armv8m_features.is_none());
+            assert_eq!(
+                core_registers_from_metadata(CoreType::Armv7em, &metadata),
+                native
+            );
         }
     }
 }
