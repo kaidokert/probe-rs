@@ -19,15 +19,16 @@ use crate::rpc::{
     functions::{
         breakpoints::convert::from_wire_source_location,
         core_ops::convert::{
-            from_wire_core_information, from_wire_core_status, from_wire_core_type,
-            from_wire_instruction_set, from_wire_register_id, from_wire_register_value,
-            to_wire_register_id, to_wire_register_value, to_wire_vector_catch_condition,
+            core_registers_from_metadata, from_wire_core_information, from_wire_core_status,
+            from_wire_core_type, from_wire_instruction_set, from_wire_register_id,
+            from_wire_register_value, to_wire_register_id, to_wire_register_value,
+            to_wire_vector_catch_condition,
         },
     },
 };
 use probe_rs::{
-    Architecture, CoreInformation, CoreRegisters, CoreStatus, CoreType, Error, InstructionSet,
-    RegisterId, RegisterValue, VectorCatchCondition,
+    Architecture, CoreInformation, CoreRegisters, CoreStatus, CoreType, Error, RegisterId,
+    RegisterValue, VectorCatchCondition,
 };
 use probe_rs_debug::{
     ColumnType, DebugRegisters, ObjectRef, SourceLocation as DebugSourceLocation, StackFrame,
@@ -128,9 +129,7 @@ pub(crate) struct CoreMetadata {
 #[derive(Clone, Copy)]
 pub struct CorePerAttachInfo {
     pub architecture: Architecture,
-    pub fpu_support: bool,
-    pub fp_register_count: Option<usize>,
-    pub instruction_set: Option<InstructionSet>,
+    pub registers: &'static CoreRegisters,
 }
 
 impl CorePerAttachInfo {
@@ -138,36 +137,27 @@ impl CorePerAttachInfo {
         client: &RpcClient,
         sessid: Key<Session>,
         core_index: usize,
-        architecture: Architecture,
+        core_type: CoreType,
     ) -> Result<Self, Error> {
         let metadata = RpcCoreClient::new_for_backend(client.clone(), sessid, core_index as u32)
             .metadata()
             .await
             .map_err(rpc_err)?;
-        Ok(Self::from_wire(architecture, metadata))
+        Ok(Self::from_wire(core_type, metadata))
     }
 
     /// Placeholder for a core the debugger will not attach to.
-    ///
-    /// A core that firmware has not enabled yet cannot be queried, and the
-    /// register file selected here only affects the core being debugged.
-    pub(crate) fn not_debugged(architecture: Architecture) -> Self {
+    pub(crate) fn not_debugged(core_type: CoreType) -> Self {
         Self {
-            architecture,
-            fpu_support: false,
-            fp_register_count: None,
-            instruction_set: None,
+            architecture: core_type.architecture(),
+            registers: CoreRegisters::for_core_type(core_type, false, None, None),
         }
     }
 
-    fn from_wire(architecture: Architecture, metadata: WireCoreMetadata) -> Self {
+    fn from_wire(core_type: CoreType, metadata: WireCoreMetadata) -> Self {
         Self {
-            architecture,
-            fpu_support: metadata.fpu_support,
-            fp_register_count: metadata
-                .floating_point_register_count
-                .map(|count| count as usize),
-            instruction_set: Some(from_wire_instruction_set(metadata.instruction_set)),
+            architecture: core_type.architecture(),
+            registers: core_registers_from_metadata(core_type, &metadata),
         }
     }
 }
@@ -202,17 +192,9 @@ impl RpcBackend {
         let core_metadata = cores
             .iter()
             .zip(per_core)
-            .map(|((_, core_type), info)| {
-                let registers = CoreRegisters::for_core_type(
-                    *core_type,
-                    info.fpu_support,
-                    info.fp_register_count,
-                    info.instruction_set,
-                );
-                CoreMetadata {
-                    architecture: info.architecture,
-                    registers,
-                }
+            .map(|(_, info)| CoreMetadata {
+                architecture: info.architecture,
+                registers: info.registers,
             })
             .collect();
 
@@ -923,7 +905,7 @@ impl From<WireDisassembledInstruction> for DisassembledInstruction {
 
 #[cfg(test)]
 mod test {
-    use probe_rs::{Architecture, CoreRegisters, CoreType, RegisterRole};
+    use probe_rs::{CoreType, RegisterRole};
 
     use super::CorePerAttachInfo;
     use probe_rs_rpc::core_ops::{WireCoreMetadata, WireInstructionSet, WireXlen};
@@ -931,10 +913,11 @@ mod test {
     #[test]
     fn rv32e_metadata_selects_rv32e_registers() {
         let info = CorePerAttachInfo::from_wire(
-            Architecture::Riscv,
+            CoreType::Riscv,
             WireCoreMetadata {
                 fpu_support: false,
                 floating_point_register_count: None,
+                armv8m_features: None,
                 instruction_set: WireInstructionSet::Riscv {
                     xlen: WireXlen::X32,
                     c: true,
@@ -944,12 +927,7 @@ mod test {
             },
         );
 
-        let registers = CoreRegisters::for_core_type(
-            CoreType::Riscv,
-            info.fpu_support,
-            info.fp_register_count,
-            info.instruction_set,
-        );
+        let registers = info.registers;
 
         assert!(
             registers
@@ -961,22 +939,17 @@ mod test {
     #[test]
     fn live_fpu_metadata_selects_floating_point_registers() {
         let info = CorePerAttachInfo::from_wire(
-            Architecture::Arm,
+            CoreType::Armv7em,
             WireCoreMetadata {
                 fpu_support: true,
                 floating_point_register_count: Some(32),
                 instruction_set: WireInstructionSet::Thumb2,
+                armv8m_features: None,
             },
         );
 
-        let registers = CoreRegisters::for_core_type(
-            CoreType::Armv7em,
-            info.fpu_support,
-            info.fp_register_count,
-            info.instruction_set,
-        );
+        let registers = info.registers;
 
-        assert_eq!(info.fp_register_count, Some(32));
         assert!(
             registers
                 .all_registers()
@@ -987,20 +960,16 @@ mod test {
     #[test]
     fn absent_fpu_metadata_selects_core_registers_only() {
         let info = CorePerAttachInfo::from_wire(
-            Architecture::Arm,
+            CoreType::Armv7em,
             WireCoreMetadata {
                 fpu_support: false,
                 floating_point_register_count: None,
                 instruction_set: WireInstructionSet::Thumb2,
+                armv8m_features: None,
             },
         );
 
-        let registers = CoreRegisters::for_core_type(
-            CoreType::Armv7em,
-            info.fpu_support,
-            info.fp_register_count,
-            info.instruction_set,
-        );
+        let registers = info.registers;
 
         assert!(
             registers
@@ -1036,5 +1005,29 @@ mod test {
         assert_eq!(metadata.cores.len(), 2);
         assert_eq!(metadata.target_name, "stm32f407vgtx");
         assert_eq!(metadata.default_format.as_deref(), Some("elf"));
+    }
+
+    #[test]
+    fn armv8m_dap_retains_secure_banks_and_stack_limits() {
+        let info = CorePerAttachInfo::from_wire(
+            CoreType::Armv8m,
+            WireCoreMetadata {
+                fpu_support: true,
+                floating_point_register_count: Some(32),
+                instruction_set: WireInstructionSet::Thumb2,
+                armv8m_features: Some(probe_rs_rpc::core_ops::WireArmv8mFeatures {
+                    main_extension: true,
+                    security_extension: true,
+                }),
+            },
+        );
+        assert_eq!(
+            info.registers.other_by_name("MSP_S").unwrap().id(),
+            probe_rs::RegisterId(26)
+        );
+        assert_eq!(
+            info.registers.other_by_name("MSPLIM_NS").unwrap().id(),
+            probe_rs::RegisterId(30)
+        );
     }
 }

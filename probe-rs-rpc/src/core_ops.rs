@@ -13,12 +13,20 @@ pub struct CoreAccessRequest {
     pub core: u32,
 }
 
+/// ARMv8-M extensions that change the debugger register file.
+#[derive(Debug, Serialize, Deserialize, Schema, Clone, Copy, PartialEq, Eq)]
+pub struct WireArmv8mFeatures {
+    pub main_extension: bool,
+    pub security_extension: bool,
+}
+
 /// Live core properties needed to select the matching static register file.
 #[derive(Debug, Serialize, Deserialize, Schema, Clone, Copy, PartialEq, Eq)]
 pub struct WireCoreMetadata {
     pub fpu_support: bool,
     pub floating_point_register_count: Option<u64>,
     pub instruction_set: WireInstructionSet,
+    pub armv8m_features: Option<WireArmv8mFeatures>,
 }
 
 #[derive(Serialize, Deserialize, Schema, Clone)]

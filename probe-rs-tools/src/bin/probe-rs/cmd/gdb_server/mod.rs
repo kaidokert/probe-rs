@@ -24,7 +24,9 @@ use probe_rs_rpc::info::WireFlashSector;
 use probe_rs_rpc_client::{RpcClient, SessionInterface};
 use tokio::runtime::Handle;
 
-use crate::rpc::functions::core_ops::convert::{from_wire_core_type, from_wire_instruction_set};
+use crate::rpc::functions::core_ops::convert::{
+    core_registers_from_metadata, from_wire_core_type, from_wire_instruction_set,
+};
 use crate::util::{cli, common_options::ProbeOptions};
 
 #[derive(clap::Parser)]
@@ -179,13 +181,7 @@ impl GdbSessionContext {
             let core_type = from_wire_core_type(wire_core.core_type);
             let meta = session.core(wire_core.index as usize).metadata().await?;
             let instruction_set = from_wire_instruction_set(meta.instruction_set);
-            let registers = CoreRegisters::for_core_type(
-                core_type,
-                meta.fpu_support,
-                meta.floating_point_register_count
-                    .map(|count| count as usize),
-                Some(instruction_set),
-            );
+            let registers = core_registers_from_metadata(core_type, &meta);
 
             let name = target
                 .as_ref()

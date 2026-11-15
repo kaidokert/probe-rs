@@ -130,16 +130,15 @@ impl SessionData {
         // core of an ESP32-S3) cannot be queried without failing the attach.
         let mut per_core = Vec::with_capacity(cores.len());
         for (core_index, core_type) in &cores {
-            let architecture = core_type.architecture();
             let is_debugged = config
                 .core_configs
                 .iter()
                 .any(|core_config| core_config.core_index == *core_index);
 
             per_core.push(if is_debugged {
-                CorePerAttachInfo::query(client, sessid, *core_index, architecture).await?
+                CorePerAttachInfo::query(client, sessid, *core_index, *core_type).await?
             } else {
-                CorePerAttachInfo::not_debugged(architecture)
+                CorePerAttachInfo::not_debugged(*core_type)
             });
         }
 
