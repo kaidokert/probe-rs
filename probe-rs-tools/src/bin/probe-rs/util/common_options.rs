@@ -13,7 +13,7 @@ use probe_rs::{
     probe::{
         DebugProbeError, DebugProbeInfo, DebugProbeSelector, Probe, ProbeCreationError,
         WireProtocol,
-        list::{Accessibility, Lister},
+        list::{Accessibility, Lister, default_probe_index},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,8 @@ pub struct BinaryDownloadOptions {
         help_heading = "DOWNLOAD CONFIGURATION"
     )]
     pub flash_layout_output_path: Option<String>,
-    /// Before flashing, read back all the flashed data to skip flashing if the device is up to date.
+    /// Before flashing, compare each erase sector with the image, and skip the sectors that are up
+    /// to date.
     #[arg(long, help_heading = "DOWNLOAD CONFIGURATION")]
     pub preverify: bool,
     /// After flashing, read back all the flashed data to verify it has been written correctly.
@@ -135,7 +136,7 @@ pub struct ProbeOptions {
     )]
     pub chip_description_path: Option<PathBuf>,
 
-    /// Protocol used to connect to chip. Possible options: [swd, jtag]
+    /// Protocol used to connect to chip. Possible options: [swd, jtag, cjtag]
     #[arg(long, env = "PROBE_RS_PROTOCOL", help_heading = "PROBE CONFIGURATION")]
     pub protocol: Option<WireProtocol>,
 
@@ -311,15 +312,16 @@ impl<'r> LoadedProbeOptions<'r> {
     }
 
     /// Selects a probe from a list of probes.
-    /// If there is only one probe, it will be selected automatically.
-    /// If there are multiple probes, the user will be prompted to select one unless
-    /// started in non-interactive mode.
+    /// If there is only one probe, or all listed probes are one device, it will be selected
+    /// automatically. Otherwise, the user will be prompted to select one unless started in
+    /// non-interactive mode.
     fn select_probe(lister: &Lister, non_interactive: bool) -> Result<Probe, OperationError> {
         let list = lister.list_all();
-        let selected = match list.len() {
-            0 | 1 => list.first().ok_or(OperationError::NoProbesFound),
-            _ if non_interactive => Err(OperationError::MultipleProbesFound { list }),
-            _ => Self::interactive_probe_select(&list),
+        let selected = match default_probe_index(&list) {
+            Some(index) => Ok(&list[index]),
+            None if list.is_empty() => Err(OperationError::NoProbesFound),
+            None if non_interactive => Err(OperationError::MultipleProbesFound { list }),
+            None => Self::interactive_probe_select(&list),
         };
 
         selected.and_then(|probe_info| Ok(lister.open(probe_info)?))

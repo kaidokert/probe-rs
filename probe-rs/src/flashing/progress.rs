@@ -104,11 +104,6 @@ impl<'a> FlashProgress<'a> {
         self.started(ProgressOperation::Program);
     }
 
-    /// Signal that the verifying procedure started.
-    pub(crate) fn started_verifying(&mut self) {
-        self.started(ProgressOperation::Verify);
-    }
-
     /// Signal that the sector erasing procedure has made progress.
     pub(super) fn sector_erased(&mut self, size: u64, time: Duration) {
         self.progressed(ProgressOperation::Erase, size, time);
@@ -122,11 +117,6 @@ impl<'a> FlashProgress<'a> {
     /// Signal that the page programming procedure has made progress.
     pub(super) fn page_programmed(&mut self, size: u64, time: Duration) {
         self.progressed(ProgressOperation::Program, size, time);
-    }
-
-    /// Signal that the page filling procedure has made progress.
-    pub(super) fn page_verified(&mut self, size: u64, time: Duration) {
-        self.progressed(ProgressOperation::Verify, size, time);
     }
 
     /// Signal that the erasing procedure failed.
@@ -144,11 +134,6 @@ impl<'a> FlashProgress<'a> {
         self.failed(ProgressOperation::Program);
     }
 
-    /// Signal that the verifying procedure failed.
-    pub(super) fn failed_verifying(&mut self) {
-        self.failed(ProgressOperation::Verify);
-    }
-
     /// Signal that the programming procedure completed successfully.
     pub(super) fn finished_programming(&mut self) {
         self.finished(ProgressOperation::Program);
@@ -163,16 +148,14 @@ impl<'a> FlashProgress<'a> {
     pub(super) fn finished_filling(&mut self) {
         self.finished(ProgressOperation::Fill);
     }
-
-    /// Signal that the verifying procedure completed successfully.
-    pub(super) fn finished_verifying(&mut self) {
-        self.finished(ProgressOperation::Verify);
-    }
 }
 
 /// The operation that is currently in progress.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressOperation {
+    /// Comparing flash contents with the image.
+    Compare,
+
     /// Reading back flash contents to restore erased regions that should be kept unchanged.
     Fill,
 
@@ -204,7 +187,8 @@ pub enum ProgressOperation {
 pub enum ProgressEvent {
     /// The flash layout is ready.
     FlashLayoutReady {
-        /// The flash layout.
+        /// The flash layout before the download starts. With preverify, each flasher can remove
+        /// work from it later.
         flash_layout: Vec<FlashLayout>,
     },
 

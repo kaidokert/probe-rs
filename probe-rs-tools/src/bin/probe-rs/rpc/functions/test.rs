@@ -43,9 +43,10 @@ fn list_tests_impl(
     sender: MonitorSender,
 ) -> anyhow::Result<Tests> {
     let shared_session = ctx.shared_session(request.sessid);
-    let mut list_handler = ListEventHandler::new(request.semihosting_options, |event| {
-        _ = sender.send_semihosting_event(event)
-    });
+    let mut list_handler = ListEventHandler::new(
+        ctx.semihosting_options(request.semihosting_options)?,
+        |event| _ = sender.send_semihosting_event(event),
+    );
 
     let core_id = request
         .rtt_client
@@ -57,16 +58,7 @@ fn list_tests_impl(
         cancellation_token: ctx.cancellation_token(),
     };
 
-    {
-        let mut session = shared_session.session_blocking();
-        crate::rpc::functions::flash::prepare_boot_info(
-            &request.boot_info,
-            &mut session,
-            run_loop.core_id,
-        )?;
-    }
-
-    let poller = request.rtt_client.map(|client| RttPoller {
+    let mut poller = request.rtt_client.map(|client| RttPoller {
         rtt_client: shared_session.object_storage().cell(client),
         clear_control_block: true,
         sender: |message| {
@@ -75,6 +67,16 @@ fn list_tests_impl(
                 .context("Failed to send RTT event")
         },
     });
+    run_loop.start_poller(&shared_session, &mut poller)?;
+
+    {
+        let mut session = shared_session.session_blocking();
+        crate::rpc::functions::flash::prepare_boot_info(
+            &request.boot_info,
+            &mut session,
+            run_loop.core_id,
+        )?;
+    }
 
     match run_loop.run_until(
         &shared_session,
@@ -123,6 +125,8 @@ fn run_test_impl(
 ) -> anyhow::Result<TestResult> {
     tracing::info!("Running test {}", request.test.name);
 
+    let semihosting_options = ctx.semihosting_options(request.semihosting_options)?;
+
     let timeout = request.test.timeout.map(|t| Duration::from_secs(t as u64));
     let timeout = timeout.unwrap_or(Duration::from_secs(60));
 
@@ -139,24 +143,17 @@ fn run_test_impl(
         discard_serial_input(serial);
     }
 
-    {
-        let mut session = shared_session.session_blocking();
-        let mut core = session.core(core_id)?;
-        core.reset_and_halt(Duration::from_millis(500))?;
-    }
-
     let expected_outcome = request.test.expected_outcome;
-    let mut run_handler =
-        RunEventHandler::new(request.test, request.semihosting_options, |event| {
-            _ = sender.send_semihosting_event(event)
-        });
+    let mut run_handler = RunEventHandler::new(request.test, semihosting_options, |event| {
+        _ = sender.send_semihosting_event(event)
+    });
 
     let mut run_loop = RunLoop {
         core_id,
         cancellation_token: ctx.cancellation_token(),
     };
 
-    let poller = request.rtt_client.map(|client| RttPoller {
+    let mut poller = request.rtt_client.map(|client| RttPoller {
         rtt_client: shared_session.object_storage().cell(client),
         clear_control_block: true,
         sender: |message| {
@@ -165,6 +162,13 @@ fn run_test_impl(
                 .context("Failed to send RTT event")
         },
     });
+    run_loop.start_poller(&shared_session, &mut poller)?;
+
+    {
+        let mut session = shared_session.session_blocking();
+        let mut core = session.core(core_id)?;
+        core.reset_and_halt(Duration::from_millis(500))?;
+    }
 
     let return_reason = with_serial_forwarding(target_serial.as_ref(), &sender, || {
         run_loop.run_until(

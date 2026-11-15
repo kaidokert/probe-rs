@@ -88,6 +88,17 @@ pub async fn write_memory<W: Word>(
     Ok(())
 }
 
+pub async fn write_bytes(
+    ctx: &mut RpcContext,
+    _header: VarHeader,
+    request: WriteMemoryRequest<u8>,
+) -> NoResponse {
+    let mut session = ctx.session(request.sessid).await;
+    let mut core = lift(session.core(request.core as usize))?;
+    lift(core.write(request.address, &request.data))?;
+    Ok(())
+}
+
 pub async fn read_memory<W: Word>(
     ctx: &mut RpcContext,
     _header: VarHeader,
@@ -112,10 +123,6 @@ pub async fn read_bytes(
     let mut session = ctx.session(request.sessid).await;
     let mut core = lift(session.core(request.core as usize))?;
 
-    fn chunk_size(count: usize, max_chunk_size: usize) -> usize {
-        (max_chunk_size.min(count) / 2).next_power_of_two()
-    }
-
     let mut result_buffer: Vec<u8> = Vec::new();
     let mut address = request.address;
     let mut num_bytes_unread = request.count as usize;
@@ -123,7 +130,7 @@ pub async fn read_bytes(
     let mut max_chunk_size = fast_buff.len();
 
     while num_bytes_unread > 0 && max_chunk_size > 0 {
-        let chunk_size = chunk_size(num_bytes_unread, max_chunk_size);
+        let chunk_size = num_bytes_unread.min(max_chunk_size);
         let buffer = &mut fast_buff[..chunk_size];
         match core.read(address, buffer) {
             Err(e) => {

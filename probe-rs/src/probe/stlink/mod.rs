@@ -1,6 +1,6 @@
 //! ST-Link probe implementation.
 
-mod constants;
+pub(crate) mod constants;
 mod tools;
 mod usb_interface;
 
@@ -111,7 +111,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
     fn speed_khz(&self) -> u32 {
         match self.protocol {
             WireProtocol::Swd => self.swd_speed_khz,
-            WireProtocol::Jtag => self.jtag_speed_khz,
+            WireProtocol::Jtag | WireProtocol::CJtag => self.jtag_speed_khz,
         }
     }
 
@@ -119,7 +119,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
         // `attach` sets the speed of the other protocol.
         match self.protocol {
             WireProtocol::Swd => self.jtag_speed_khz = speed_khz,
-            WireProtocol::Jtag => self.swd_speed_khz = speed_khz,
+            WireProtocol::Jtag | WireProtocol::CJtag => self.swd_speed_khz = speed_khz,
         }
 
         match self.hw_version.cmp(&3) {
@@ -137,7 +137,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
                         Err(DebugProbeError::UnsupportedSpeed(speed_khz))
                     }
                 }
-                WireProtocol::Jtag => {
+                WireProtocol::Jtag | WireProtocol::CJtag => {
                     let actual_speed = JTagFrequencyToDivider::find_setting(speed_khz);
 
                     if let Some(actual_speed) = actual_speed {
@@ -164,7 +164,9 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
 
                 match self.protocol {
                     WireProtocol::Swd => self.swd_speed_khz = actual_speed_khz,
-                    WireProtocol::Jtag => self.jtag_speed_khz = actual_speed_khz,
+                    WireProtocol::Jtag | WireProtocol::CJtag => {
+                        self.jtag_speed_khz = actual_speed_khz
+                    }
                 }
 
                 Ok(actual_speed_khz)
@@ -177,7 +179,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
         self.enter_idle()?;
 
         let param = match self.protocol {
-            WireProtocol::Jtag => {
+            WireProtocol::Jtag | WireProtocol::CJtag => {
                 tracing::debug!("Switching protocol to JTAG");
                 commands::JTAG_ENTER_JTAG_NO_CORE_RESET
             }
@@ -216,7 +218,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
         // To ensure the default speed is used if not changed,
         // we set the speed again here.
         match self.protocol {
-            WireProtocol::Jtag => {
+            WireProtocol::Jtag | WireProtocol::CJtag => {
                 self.set_speed(self.jtag_speed_khz)?;
             }
             WireProtocol::Swd => {
@@ -294,6 +296,7 @@ impl DebugProbe for StLink<StLinkUsbDevice> {
         match protocol {
             WireProtocol::Jtag => self.protocol = WireProtocol::Jtag,
             WireProtocol::Swd => self.protocol = WireProtocol::Swd,
+            WireProtocol::CJtag => return Err(DebugProbeError::UnsupportedProtocol(protocol)),
         }
         Ok(())
     }
@@ -616,7 +619,7 @@ impl<D: StLinkUsb> StLink<D> {
 
         let cmd_proto = match protocol {
             WireProtocol::Swd => 0,
-            WireProtocol::Jtag => 1,
+            WireProtocol::Jtag | WireProtocol::CJtag => 1,
         };
 
         let mut command = vec![commands::JTAG_COMMAND, commands::SET_COM_FREQ, cmd_proto, 0];
@@ -635,7 +638,7 @@ impl<D: StLinkUsb> StLink<D> {
     ) -> Result<(Vec<u32>, u32), StlinkError> {
         let cmd_proto = match protocol {
             WireProtocol::Swd => 0,
-            WireProtocol::Jtag => 1,
+            WireProtocol::Jtag | WireProtocol::CJtag => 1,
         };
 
         let mut buf = [0; 52];
@@ -1262,6 +1265,21 @@ pub enum StlinkError {
 
     /// USB error.
     Usb(#[from] std::io::Error),
+}
+
+impl StlinkError {
+    /// Returns `true` if the probe works, and the target reported a fault of an access.
+    pub(crate) fn is_target_fault(&self) -> bool {
+        matches!(
+            self,
+            Self::CommandFailed(
+                Status::SwdApFault
+                    | Status::SwdDpFault
+                    | Status::SwdApStickyError
+                    | Status::SwdApStickyorunError
+            )
+        )
+    }
 }
 
 impl ProbeError for StlinkError {}
@@ -2046,6 +2064,20 @@ mod test {
         probe
             .select_ap(1)
             .expect("Selecting AP other than AP 0 should work");
+    }
+
+    #[test]
+    fn target_faults_are_the_fault_and_sticky_statuses() {
+        for status in [
+            Status::SwdApFault,
+            Status::SwdDpFault,
+            Status::SwdApStickyError,
+            Status::SwdApStickyorunError,
+        ] {
+            assert!(StlinkError::CommandFailed(status).is_target_fault());
+        }
+        assert!(!StlinkError::CommandFailed(Status::SwdApWait).is_target_fault());
+        assert!(!StlinkError::BanksNotAllowedOnDPRegister.is_target_fault());
     }
 
     #[test]

@@ -86,20 +86,35 @@ impl std::fmt::Display for CmsisDapFactory {
 
 impl ProbeFactory for CmsisDapFactory {
     fn open(&self, selector: &DebugProbeSelector) -> Result<Box<dyn DebugProbe>, DebugProbeError> {
-        let device = match tcp_address(selector) {
-            Some(address) => CmsisDapDevice::Tcp {
-                device: tcp::TcpDevice::connect(address).map_err(|error| {
-                    DebugProbeError::ProbeCouldNotBeCreated(CmsisDapError::TcpConnect(error).into())
-                })?,
-                // Large enough for the packet size query; the reply to it replaces this.
-                max_packet_size: 1024,
-                timeout: commands::DEFAULT_USB_TIMEOUT,
-            },
+        let (device, product) = match tcp_address(selector) {
+            Some(address) => (
+                CmsisDapDevice::Tcp {
+                    device: tcp::TcpDevice::connect(address).map_err(|error| {
+                        DebugProbeError::ProbeCouldNotBeCreated(
+                            CmsisDapError::TcpConnect(error).into(),
+                        )
+                    })?,
+                    // Large enough for the packet size query; the reply to it replaces this.
+                    max_packet_size: 1024,
+                    timeout: commands::DEFAULT_USB_TIMEOUT,
+                },
+                None,
+            ),
             None => tools::open_device_from_selector(selector)?,
         };
-        CmsisDap::new_from_device(device)
-            .map(Box::new)
-            .map(DebugProbe::into_probe)
+
+        let mut dap = CmsisDap::new_from_device(device)?;
+        if let Some(product) = product
+            && tools::loses_pipelined_replies(&product)
+        {
+            tracing::warn!(
+                "{product}: this firmware loses replies to parallel requests. \
+                 probe-rs sends one request at a time. Update the firmware for faster transfers."
+            );
+            dap.packet_count = 1;
+        }
+
+        Ok(DebugProbe::into_probe(Box::new(dap)))
     }
 
     fn list_probes(&self) -> Vec<crate::probe::list::ProbeListItem> {
@@ -117,13 +132,15 @@ impl ProbeFactory for CmsisDapFactory {
             return vec![crate::probe::list::ProbeListItem::accessible(
                 crate::probe::DebugProbeInfo {
                     identifier: "CMSIS-DAP TCP".to_string(),
-                    vendor_id: tcp::TCP_VID,
-                    product_id: tcp::TCP_PID,
-                    serial_number: Some(address.to_string()),
+                    transport: crate::probe::ProbeTransport::Usb(crate::probe::UsbProbeInfo {
+                        vendor_id: tcp::TCP_VID,
+                        product_id: tcp::TCP_PID,
+                        serial_number: Some(address.to_string()),
+                        is_hid_interface: false,
+                        interface: None,
+                        usb_location: None,
+                    }),
                     probe_factory: &Self,
-                    is_hid_interface: false,
-                    interface: None,
-                    usb_location: None,
                 },
             )];
         }
@@ -136,6 +153,7 @@ impl ProbeFactory for CmsisDapFactory {
 
 /// The address of the TCP probe a selector names, if it names one.
 fn tcp_address(selector: &DebugProbeSelector) -> Option<&str> {
+    let DebugProbeSelector::Usb(selector) = selector;
     if selector.vendor_id != tcp::TCP_VID || selector.product_id != tcp::TCP_PID {
         return None;
     }
@@ -216,9 +234,10 @@ impl CmsisDap {
         device.drain();
 
         // Before anything else is asked of the probe. Until this returns, the size a report has to
-        // be to reach the device is a guess -- and some answer nothing at all until they receive a
-        // full one, which is what the retrying inside here is for. Anything sent before it can go
-        // unanswered on those probes for reasons that have nothing to do with the probe's state.
+        // be to reach the device is a guess if the HID report descriptor gave none -- and some
+        // answer nothing at all until they receive a full one, which is what the retrying inside
+        // here is for. Anything sent before it can go unanswered on those probes for reasons that
+        // have nothing to do with the probe's state.
         let packet_size = device.find_packet_size()? as u16;
 
         // A probe that still owes replies from an earlier session answers the start of this one
@@ -803,7 +822,7 @@ impl CmsisDap {
         let protocol: ConnectRequest = if let Some(protocol) = self.protocol {
             match protocol {
                 WireProtocol::Swd => ConnectRequest::Swd,
-                WireProtocol::Jtag => ConnectRequest::Jtag,
+                WireProtocol::Jtag | WireProtocol::CJtag => ConnectRequest::Jtag,
             }
         } else {
             ConnectRequest::DefaultPort
@@ -888,15 +907,20 @@ impl CmsisDap {
         Ok(())
     }
 
+    /// The packet size the probe reported, in bytes.
+    pub fn packet_size(&self) -> usize {
+        usize::from(self.packet_size)
+    }
+
     /// Send a vendor command and return its response payload.
     ///
     /// The command ID and payload are defined by the probe firmware. The response excludes the
     /// command ID and may include packet padding.
     ///
-    /// The payload must fit in one packet, leaving one byte for the command ID. Callers must
-    /// interpret the response using the vendor's protocol, including any status bytes. A probe
-    /// that rejects the command with `ID_DAP_Invalid` returns
-    /// [`DebugProbeError::CommandNotSupportedByProbe`].
+    /// The payload must fit in one packet, leaving one byte for the command ID: at most
+    /// [`packet_size`](Self::packet_size) - 1 bytes. Callers must interpret the response using
+    /// the vendor's protocol, including any status bytes. A probe that rejects the command with
+    /// `ID_DAP_Invalid` returns [`DebugProbeError::CommandNotSupportedByProbe`].
     pub fn send_vendor_command(
         &mut self,
         command_id: VendorCommandId,
@@ -1346,13 +1370,15 @@ mod tests {
         let mut dap = CmsisDap::new_from_device(CmsisDapDevice::Fake(probe.clone())).unwrap();
         let sent = probe.lock().unwrap().sent.len();
 
+        let maximum = dap.packet_size() - 1;
+
         assert!(
-            dap.send_vendor_command(VENDOR_COMMAND, &[0x55; 64])
+            dap.send_vendor_command(VENDOR_COMMAND, &vec![0x55; maximum + 1])
                 .is_err()
         );
         assert_eq!(probe.lock().unwrap().sent.len(), sent);
 
-        dap.send_vendor_command(VENDOR_COMMAND, &[0x55; 63])
+        dap.send_vendor_command(VENDOR_COMMAND, &vec![0x55; maximum])
             .unwrap();
         assert_eq!(probe.lock().unwrap().sent.last().unwrap().len(), 64);
     }

@@ -9,7 +9,7 @@
 
 use std::fmt::Debug;
 
-use crate::flashing::FlashLayout;
+use crate::flashing::{FlashLayout, FlashLoader};
 use probe_rs_target::NvmRegion;
 
 use crate::Error;
@@ -25,20 +25,46 @@ use crate::session::Session;
 /// ## Lifecycle
 ///
 /// ```text
+/// flashes_download() ← once per download, while the flash plan is built
 /// prepare_flash()    ← enter required mode (e.g. SACI for CC27xx, release probe for CC35xx)
 ///   erase_all() / erase_sector()
 ///   program() ...    ← per-page, OR
 ///   program_image()  ← whole-image (overrides per-page loop when Some is returned)
-///   verify() ...
+///   compare ...      ← the `flash_compare` backend of the debug sequence, then a core read-back
 /// finish_flash()     ← exit mode / re-acquire probe; called after both full flash and verify
 ///
 /// [standalone verify pass — same bookends:]
 /// prepare_flash()
-///   verify() ...
+///   compare ...
+/// finish_flash()
+///
+/// [with preverify, before the full flash, when sector erase is supported — same bookends:]
+/// prepare_flash()
+///   compare ...
 /// finish_flash()
 /// ```
+///
+/// With preverify, the flash loader calls `prepare_flash` and `finish_flash` once more. Do not
+/// reset there if the target loses state on a reset.
 pub trait DebugFlashSequence: Send + Sync + Debug {
-    /// Called once before any erase/program/verify operations begin.
+    /// Whether this sequence flashes the download, rather than the flash algorithms of the
+    /// target's regions.
+    ///
+    /// The flash loader calls this once per download, while it builds the flash plan and before
+    /// anything is compared, erased or programmed. `loader` holds the download's data, and
+    /// `chip_erase` is set when the download starts with a chip erase.
+    ///
+    /// The default returns `true`.
+    fn flashes_download(
+        &self,
+        _session: &mut Session,
+        _loader: &FlashLoader,
+        _chip_erase: bool,
+    ) -> Result<bool, Error> {
+        Ok(true)
+    }
+
+    /// Called before erase/program/verify operations begin.
     ///
     /// Use this to enter a required programming mode or, for external-toolbox devices,
     /// to release the probe connection so that the toolbox can acquire exclusive hardware
@@ -76,6 +102,9 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     /// override this method.  When it returns `Ok(true)`, the per-page `program()` loop is skipped.
     ///
     /// The default returns `Ok(false)`, falling back to the per-page `program()` calls.
+    ///
+    /// If [`supports_sector_erase`](Self::supports_sector_erase) returns `true`, `regions` can
+    /// hold only the sectors that changed.
     fn program_image(
         &self,
         _session: &mut Session,
@@ -83,11 +112,6 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
     ) -> Result<bool, Error> {
         Ok(false)
     }
-
-    /// Verify that the data at the given address matches `data`.
-    ///
-    /// Returns `Ok(true)` if verification passed, `Ok(false)` on mismatch.
-    fn verify(&self, session: &mut Session, address: u64, data: &[u8]) -> Result<bool, Error>;
 
     /// Returns whether this device supports erasing the entire chip in one operation.
     ///
@@ -103,8 +127,8 @@ pub trait DebugFlashSequence: Send + Sync + Debug {
 
     /// Returns whether this device supports per-sector erase.
     ///
-    /// When `false`, [`HostSideFlasher`](super::HostSideFlasher) performs a single chip erase
-    /// via [`erase_all`](Self::erase_all) before programming instead of calling
+    /// When `false`, the download starts with a single chip erase through
+    /// [`erase_all`](Self::erase_all), for all flash algorithms, instead of calling
     /// [`erase_sector`](Self::erase_sector) for each sector.
     ///
     /// Defaults to `true`.
@@ -145,14 +169,6 @@ mod tests {
             _data: &[u8],
         ) -> Result<(), Error> {
             Ok(())
-        }
-        fn verify(
-            &self,
-            _session: &mut Session,
-            _address: u64,
-            _data: &[u8],
-        ) -> Result<bool, Error> {
-            Ok(true)
         }
     }
 

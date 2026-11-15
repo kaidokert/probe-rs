@@ -11,7 +11,7 @@ use std::{
 use probe_rs_target::CoreType;
 
 pub use crate::flashing::DebugFlashSequence;
-use crate::flashing::FlashVerify;
+use crate::flashing::FlashCompare;
 
 use crate::{
     MemoryInterface, MemoryMappedRegister,
@@ -573,7 +573,7 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
             // Make sure the debug port is in the correct mode based on what the probe
             // has selected via active_protocol
             match interface.active_protocol() {
-                Some(WireProtocol::Jtag) => {
+                Some(WireProtocol::Jtag | WireProtocol::CJtag) => {
                     if has_dormant {
                         tracing::debug!("Select Dormant State (from SWD)");
                         interface.swj_sequence(&BitSequence::from_u64(16, 0xE3BC))?;
@@ -1028,7 +1028,7 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
         dp: DpAddress,
     ) -> Result<(), ArmError> {
         match interface.active_protocol() {
-            Some(WireProtocol::Jtag) => {
+            Some(WireProtocol::Jtag | WireProtocol::CJtag) => {
                 tracing::debug!("JTAG: No special sequence needed to connect to debug port");
                 return Ok(());
             }
@@ -1254,12 +1254,10 @@ pub trait ArmDebugSequence: Send + Sync + Debug {
         None
     }
 
-    /// Return the fast flash verification implementation if one exists.
+    /// Return the flash compare method of this target, if it has one.
     ///
-    /// A target whose flash controller can compute a signature over a range of flash lets the
-    /// flash loader check an image without reading it back. The default is `None`, so
-    /// verification reads the contents back as before.
-    fn flash_verify_sequence(&self) -> Option<Arc<dyn FlashVerify>> {
+    /// See [`FlashCompare`] for the rules.
+    fn flash_compare(&self) -> Option<Arc<dyn FlashCompare>> {
         None
     }
 

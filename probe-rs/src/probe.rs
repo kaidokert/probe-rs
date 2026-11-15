@@ -21,6 +21,7 @@ pub mod swd;
 pub mod target_serial;
 pub mod ti_icdi;
 pub mod wlink;
+pub mod xds110;
 pub mod xvc;
 
 use crate::CoreStatus;
@@ -56,7 +57,7 @@ pub use queue::{
 };
 #[allow(deprecated)]
 pub use queue::{DeferredResultIndex, DeferredResultSet, ErasedQueue, Queue};
-pub use selector::DebugProbeSelector;
+pub use selector::{DebugProbeSelector, UsbSelector};
 pub use swd::{
     BitbangSwd, Direction, IoSequenceItem, Pins, Port, SwdBatch, SwdOp, SwdPort, SwdProbe,
     SwdSettings, SwdTransferError,
@@ -69,6 +70,8 @@ const LOW_TARGET_VOLTAGE_WARNING_THRESHOLD: f32 = 1.4;
 static DRIVERS: LazyLock<RwLock<Vec<&'static dyn ProbeFactory>>> = LazyLock::new(|| {
     let probes: Vec<&'static dyn ProbeFactory> = vec![
         &blackmagic::BlackMagicProbeFactory,
+        // Before CMSIS-DAP, which also opens the XDS110.
+        &xds110::Xds110Factory,
         &cmsisdap::CmsisDapFactory,
         &ftdi::FtdiProbeFactory,
         &stlink::StLinkFactory,
@@ -90,7 +93,8 @@ pub(crate) fn register_probe_factory(factory: &'static dyn ProbeFactory) {
 
 /// The protocol that is to be used by the probe when communicating with the target.
 ///
-/// For ARM select `Swd` or `Jtag`, for RISC-V select `Jtag`.
+/// For ARM select `Swd` or `Jtag`, for RISC-V select `Jtag`. `CJtag` is JTAG over the two
+/// wires of IEEE 1149.7 (OScan1), for probes that translate it.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WireProtocol {
     /// Serial Wire Debug is ARMs proprietary standard for communicating with ARM cores.
@@ -99,6 +103,16 @@ pub enum WireProtocol {
     /// JTAG is a standard which is supported by many chips independent of architecture.
     /// See [`Wikipedia`](https://en.wikipedia.org/wiki/JTAG) for more info.
     Jtag,
+    /// Compact JTAG (IEEE 1149.7) on two wires, TMSC and TCKC, in the OScan1 format. The probe
+    /// translates the JTAG operations, so the target sees JTAG.
+    CJtag,
+}
+
+impl WireProtocol {
+    /// Whether the protocol carries JTAG operations: JTAG or cJTAG.
+    pub fn is_jtag(self) -> bool {
+        matches!(self, WireProtocol::Jtag | WireProtocol::CJtag)
+    }
 }
 
 impl fmt::Display for WireProtocol {
@@ -106,6 +120,7 @@ impl fmt::Display for WireProtocol {
         match self {
             WireProtocol::Swd => f.write_str("SWD"),
             WireProtocol::Jtag => f.write_str("JTAG"),
+            WireProtocol::CJtag => f.write_str("cJTAG"),
         }
     }
 }
@@ -117,8 +132,9 @@ impl std::str::FromStr for WireProtocol {
         match &s.to_ascii_lowercase()[..] {
             "swd" => Ok(WireProtocol::Swd),
             "jtag" => Ok(WireProtocol::Jtag),
+            "cjtag" => Ok(WireProtocol::CJtag),
             _ => Err(format!(
-                "'{s}' is not a valid protocol. Choose either 'swd' or 'jtag'."
+                "'{s}' is not a valid protocol. Choose 'swd', 'jtag' or 'cjtag'."
             )),
         }
     }
@@ -439,7 +455,7 @@ impl Probe {
         // A debug port with SWJ pin switching that an earlier session left in SWD mode keeps
         // its JTAG TAPs off TDO, so the scan below would find an empty chain. The switch
         // sequence never enters a Capture or Update state, so JTAG-only TAPs ignore it.
-        if self.protocol() == Some(WireProtocol::Jtag)
+        if self.protocol().is_some_and(WireProtocol::is_jtag)
             && self.inner.try_as_jtag_chain_access_mut().is_some()
             && let Err(error) = self.with_debug_port_wire(switch_swd_to_jtag)
         {
@@ -449,7 +465,7 @@ impl Probe {
         // A JTAG consumer needs the padding parameters of a TAP. Select the first one, so that a
         // caller that does not know the chain can access the target. A chain that is not visible
         // yet is not an error here: a debug sequence may route the TAP later.
-        if self.protocol() == Some(WireProtocol::Jtag)
+        if self.protocol().is_some_and(WireProtocol::is_jtag)
             && let Some(mut chain) = self.try_as_jtag_chain()
             && let Err(error) = chain.select(0)
         {
@@ -970,6 +986,27 @@ impl PartialEq for dyn ProbeFactory {
 pub struct DebugProbeInfo {
     /// The name of the debug probe.
     pub identifier: String,
+    /// How the probe is reached.
+    pub transport: ProbeTransport,
+
+    /// A reference to the [`ProbeFactory`] that created this info object.
+    probe_factory: &'static dyn ProbeFactory,
+}
+
+/// How a debug probe is reached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProbeTransport {
+    /// A USB probe.
+    ///
+    /// Probes that are not on USB, such as those reached over TCP and the Linux GPIO and SPI
+    /// probes, are listed with this variant too for now: with a placeholder VID and PID, and their
+    /// address as the serial number.
+    Usb(UsbProbeInfo),
+}
+
+/// A USB debug probe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsbProbeInfo {
     /// The USB vendor ID of the debug probe.
     pub vendor_id: u16,
     /// The USB product ID of the debug probe.
@@ -987,27 +1024,25 @@ pub struct DebugProbeInfo {
     /// Tells identical probes (same VID/PID, no serial number) apart while they stay plugged
     /// in. It is not part of the string form of a [`DebugProbeSelector`].
     pub usb_location: Option<(String, u8)>,
-
-    /// A reference to the [`ProbeFactory`] that created this info object.
-    probe_factory: &'static dyn ProbeFactory,
 }
 
 impl std::fmt::Display for DebugProbeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let ProbeTransport::Usb(usb) = &self.transport;
         write!(
             f,
             "{} -- {:04x}:{:04x}",
-            self.identifier, self.vendor_id, self.product_id,
+            self.identifier, usb.vendor_id, usb.product_id,
         )?;
 
-        if let Some(interface) = self.interface {
+        if let Some(interface) = usb.interface {
             write!(f, "-{}", interface)?;
         }
 
         write!(
             f,
             ":{} ({})",
-            self.serial_number.as_deref().unwrap_or(""),
+            usb.serial_number.as_deref().unwrap_or(""),
             self.probe_factory
         )
     }
@@ -1026,13 +1061,15 @@ impl DebugProbeInfo {
     ) -> Self {
         Self {
             identifier: identifier.into(),
-            vendor_id,
-            product_id,
-            serial_number,
+            transport: ProbeTransport::Usb(UsbProbeInfo {
+                vendor_id,
+                product_id,
+                serial_number,
+                interface,
+                is_hid_interface,
+                usb_location: None,
+            }),
             probe_factory,
-            interface,
-            is_hid_interface,
-            usb_location: None,
         }
     }
 

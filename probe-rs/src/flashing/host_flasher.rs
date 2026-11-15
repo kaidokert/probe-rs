@@ -166,7 +166,8 @@ impl HostSideFlasher {
         })
     }
 
-    fn run_with_flash<R>(
+    /// Runs `f` between the setup and the cleanup of the flash sequence.
+    pub(super) fn run_with_flash<R>(
         &mut self,
         session: &mut Session,
         f: impl FnOnce(&mut Self, &mut Session) -> Result<R, FlashError>,
@@ -235,6 +236,8 @@ impl HostSideFlasher {
     }
 
     /// Program flash via the debug flash sequence.
+    ///
+    /// The caller runs this in [`run_with_flash`](Self::run_with_flash).
     pub(super) fn program(
         &mut self,
         session: &mut Session,
@@ -242,151 +245,96 @@ impl HostSideFlasher {
         restore_unwritten_bytes: bool,
         _enable_double_buffering: bool,
         skip_erasing: bool,
-        verify: bool,
     ) -> Result<(), FlashError> {
         tracing::debug!("Host-side: Starting program procedure");
 
-        self.run_with_flash(session, |this, session| {
-            if restore_unwritten_bytes {
-                this.fill_unwritten(session, progress)?;
-            }
+        if restore_unwritten_bytes {
+            self.fill_unwritten(session, progress)?;
+        }
 
-            // If sector erase is not supported, fall back to chip erase once before programming.
-            if !skip_erasing && !this.flash_sequence.supports_sector_erase() {
-                tracing::info!("Host-side: Device does not support sector erase, using chip erase");
-                this.flash_sequence.erase_all(session).map_err(|e| {
-                    FlashError::ChipEraseFailed {
-                        source: Box::new(e),
-                    }
-                })?;
-                progress.finished_erasing();
-            }
+        // Check whether the sequence supports whole-image programming.  If so,
+        // collect all (region, layout) pairs and call program_image() once instead
+        // of the per-page loop below.
+        let region_layouts: Vec<(&NvmRegion, &FlashLayout)> = self
+            .regions
+            .iter()
+            .map(|r| (&r.region, r.flash_layout()))
+            .collect();
 
-            // Check whether the sequence supports whole-image programming.  If so,
-            // collect all (region, layout) pairs and call program_image() once instead
-            // of the per-page loop below.
-            let region_layouts: Vec<(&NvmRegion, &FlashLayout)> = this
-                .regions
-                .iter()
-                .map(|r| (&r.region, r.flash_layout()))
-                .collect();
-
-            if this
-                .flash_sequence
-                .program_image(session, &region_layouts)
-                .map_err(FlashError::Core)?
-            {
-                // Progress reporting for whole-image: report all pages as programmed.
-                for r in &this.regions {
-                    let layout = r.flash_layout();
-                    for page in layout.pages() {
-                        progress.page_programmed(page.size() as u64, std::time::Duration::ZERO);
-                    }
-                    progress.finished_programming();
-
-                    // Verify if requested
-                    if verify && !this.verify_layout(session, layout)? {
-                        return Err(FlashError::Verify);
-                    }
+        if self
+            .flash_sequence
+            .program_image(session, &region_layouts)
+            .map_err(FlashError::Core)?
+        {
+            // Progress reporting for whole-image: report all pages as programmed.
+            for r in &self.regions {
+                let layout = r.flash_layout();
+                for page in layout.pages() {
+                    progress.page_programmed(page.size() as u64, std::time::Duration::ZERO);
                 }
-            } else {
-                // Process each region with the per-page loop.
-                for region in &this.regions {
-                    let layout = region.flash_layout();
+                progress.finished_programming();
+            }
+        } else {
+            // Process each region with the per-page loop.
+            for region in &self.regions {
+                let layout = region.flash_layout();
 
-                    // Erase sectors if not skipping and sector erase is supported.
-                    if !skip_erasing && this.flash_sequence.supports_sector_erase() {
-                        tracing::debug!("Host-side: Erasing sectors");
-                        for sector in layout.sectors() {
-                            tracing::debug!(
-                                "Host-side: Erasing sector at 0x{:08X} ({} bytes)",
-                                sector.address(),
-                                sector.size()
-                            );
-                            this.flash_sequence
-                                .erase_sector(session, sector.address())
-                                .map_err(|e| FlashError::EraseFailed {
-                                    sector_address: sector.address(),
-                                    source: Box::new(e),
-                                })?;
-                        }
-                        progress.finished_erasing();
-                    }
-
-                    // Program pages
-                    tracing::debug!("Host-side: Programming pages");
-                    let mut t = Instant::now();
-                    for page in layout.pages() {
+                // Erase sectors if not skipping and sector erase is supported.
+                if !skip_erasing && self.flash_sequence.supports_sector_erase() {
+                    tracing::debug!("Host-side: Erasing sectors");
+                    for sector in layout.sectors() {
                         tracing::debug!(
-                            "Host-side: Programming page at 0x{:08X} ({} bytes)",
-                            page.address(),
-                            page.data().len()
+                            "Host-side: Erasing sector at 0x{:08X} ({} bytes)",
+                            sector.address(),
+                            sector.size()
                         );
-                        this.flash_sequence
-                            .program(session, page.address(), page.data())
-                            .map_err(|e| FlashError::PageWrite {
-                                page_address: page.address(),
+                        self.flash_sequence
+                            .erase_sector(session, sector.address())
+                            .map_err(|e| FlashError::EraseFailed {
+                                sector_address: sector.address(),
                                 source: Box::new(e),
                             })?;
-
-                        progress.page_programmed(page.size() as u64, t.elapsed());
-                        t = Instant::now();
                     }
-                    progress.finished_programming();
-
-                    // Verify if requested
-                    if verify && !this.verify_layout(session, layout)? {
-                        return Err(FlashError::Verify);
-                    }
+                    progress.finished_erasing();
                 }
-            }
 
-            Ok(())
-        })
-    }
+                // Program pages
+                tracing::debug!("Host-side: Programming pages");
+                let mut t = Instant::now();
+                for page in layout.pages() {
+                    tracing::debug!(
+                        "Host-side: Programming page at 0x{:08X} ({} bytes)",
+                        page.address(),
+                        page.data().len()
+                    );
+                    self.flash_sequence
+                        .program(session, page.address(), page.data())
+                        .map_err(|e| FlashError::PageWrite {
+                            page_address: page.address(),
+                            source: Box::new(e),
+                        })?;
 
-    /// Verify flash contents against expected data.
-    ///
-    /// Returns `true` if all pages verify successfully, `false` otherwise.
-    pub(super) fn verify(
-        &mut self,
-        session: &mut Session,
-        _progress: &mut FlashProgress<'_>,
-        _ignore_filled: bool,
-    ) -> Result<bool, FlashError> {
-        tracing::debug!("Host-side: Starting verify procedure");
-        self.run_with_flash(session, |this, session| {
-            for r in &this.regions {
-                if !this.verify_layout(session, r.flash_layout())? {
-                    return Ok(false);
+                    progress.page_programmed(page.size() as u64, t.elapsed());
+                    t = Instant::now();
                 }
-            }
-
-            Ok(true)
-        })
-    }
-
-    fn verify_layout(
-        &self,
-        session: &mut Session,
-        layout: &FlashLayout,
-    ) -> Result<bool, FlashError> {
-        for page in layout.pages() {
-            let verified = self
-                .flash_sequence
-                .verify(session, page.address(), page.data())
-                .map_err(FlashError::Core)?;
-
-            if !verified {
-                tracing::error!(
-                    "Host-side: Verification failed at address 0x{:08X}",
-                    page.address()
-                );
-                return Ok(false);
+                progress.finished_programming();
             }
         }
 
-        Ok(true)
+        Ok(())
+    }
+
+    /// Returns a copy of the region and the layout of each region.
+    pub(super) fn layouts(&self) -> Vec<(NvmRegion, FlashLayout)> {
+        self.regions
+            .iter()
+            .map(|region| (region.region.clone(), region.data.layout().clone()))
+            .collect()
+    }
+
+    /// Returns `true` if a download can skip single sectors.
+    pub(super) fn can_skip_sectors(&self) -> bool {
+        self.flash_sequence.supports_sector_erase()
     }
 }
 

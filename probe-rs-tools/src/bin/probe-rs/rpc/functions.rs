@@ -25,7 +25,7 @@ use crate::rpc::{
             boot, build, erase_all, erase_range, flash, load_region, new_flash_loader, verify,
         },
         info::{target_info, target_metadata},
-        memory::{read_bytes, read_memory, write_memory},
+        memory::{read_bytes, read_memory, write_bytes, write_memory},
         monitor::{monitor, write_serial},
         probe::{attach, list_probes, select_probe},
         reset::{reset, reset_and_halt, reset_target},
@@ -38,7 +38,11 @@ use crate::rpc::{
     },
 };
 use crate::util::probe_config::ConfiguredLister;
-use probe_rs_rpc::transport::memory::{WireRx, WireTx};
+use probe_rs_rpc::semihosting_options::SemihostingOptions;
+use probe_rs_rpc::transport::{
+    MAX_REQUEST_LEN,
+    memory::{WireRx, WireTx},
+};
 
 use anyhow::anyhow;
 use futures_util::FutureExt;
@@ -83,6 +87,7 @@ pub struct RpcSpawnContext {
     sender: PostcardSender<WireTxImpl>,
     probe_broker: Arc<ProbeBroker>,
     lister: Arc<dyn ProbeLister + Send + Sync>,
+    host_files: HostFiles,
 }
 
 pub(crate) trait MultiTopicWriter {
@@ -170,6 +175,21 @@ impl RpcSpawnContext {
         Lister::with_lister(Box::new(ArcLister(self.lister.clone())))
     }
 
+    /// Returns the semihosting options of a request, or an error if they map paths and the
+    /// server does not give access to its files.
+    pub(crate) fn semihosting_options(
+        &self,
+        options: SemihostingOptions,
+    ) -> anyhow::Result<SemihostingOptions> {
+        if self.host_files == HostFiles::Deny && !options.mappings().is_empty() {
+            anyhow::bail!(
+                "This server does not give semihosting access to its files. \
+                Remove the semihosting file mappings."
+            );
+        }
+        Ok(options)
+    }
+
     pub(crate) async fn set_session(
         &self,
         session: probe_rs::Session,
@@ -215,6 +235,7 @@ impl LimitedLister {
     }
 
     fn is_allowed(&self, selector: &DebugProbeSelector) -> bool {
+        let DebugProbeSelector::Usb(selector) = selector;
         // We aren't using `.to_string()` because it doesn't append an empty serial when missing.
         let sel_without_serial = format!("{:04x}:{:04x}", selector.vendor_id, selector.product_id);
         let mut sel_with_serial = format!("{sel_without_serial}:");
@@ -261,6 +282,15 @@ pub(crate) enum ProbeAccess {
     Deny(Vec<String>),
 }
 
+/// Semihosting access to the files of the server host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostFiles {
+    /// The server runs in the client process, so its files are the files of the client.
+    Allow,
+    /// The server accepts connections from other processes. A client must not access its files.
+    Deny,
+}
+
 pub struct RpcContext {
     /// State associated with a single connection.
     state: ConnectionState,
@@ -271,6 +301,7 @@ pub struct RpcContext {
     /// [`RpcContext::lister`] repackages it as an owned [`Lister`] per call.
     lister: Arc<dyn ProbeLister + Send + Sync>,
     probe_broker: Arc<ProbeBroker>,
+    host_files: HostFiles,
 }
 
 /// Shim that lets a [`Lister`] own a reference to the shared
@@ -296,6 +327,7 @@ impl SpawnContext for RpcContext {
             sender: self.sender.clone().unwrap(),
             probe_broker: self.probe_broker.clone(),
             lister: self.lister.clone(),
+            host_files: self.host_files,
         }
     }
 }
@@ -315,6 +347,7 @@ impl RpcContext {
     pub fn with_lister(
         lister: Arc<dyn ProbeLister + Send + Sync>,
         probe_broker: Arc<ProbeBroker>,
+        host_files: HostFiles,
     ) -> Self {
         let configs = probe_broker.probe_configs().clone();
         Self {
@@ -322,6 +355,7 @@ impl RpcContext {
             sender: None,
             lister: Arc::new(ConfiguredLister::new(ArcLister(lister), configs)),
             probe_broker,
+            host_files,
         }
     }
 
@@ -553,6 +587,7 @@ postcard_rpc::define_dispatch! {
         | WriteMemory16Endpoint            | async | write_memory               |
         | WriteMemory32Endpoint            | async | write_memory               |
         | WriteMemory64Endpoint            | async | write_memory               |
+        | WriteBytesEndpoint               | async | write_bytes                |
     };
     topics_in: {
         list: TOPICS_IN_LIST;
@@ -601,11 +636,13 @@ impl RpcApp {
         depth: usize,
         probe_access: ProbeAccess,
         probe_broker: Arc<ProbeBroker>,
+        host_files: HostFiles,
     ) -> (RpcServer, TxChannel, RxChannel) {
         Self::create_server_with_lister(
             depth,
             Arc::new(LimitedLister::new(probe_access)),
             probe_broker,
+            host_files,
         )
     }
 
@@ -615,6 +652,7 @@ impl RpcApp {
         depth: usize,
         lister: Arc<dyn ProbeLister + Send + Sync>,
         probe_broker: Arc<ProbeBroker>,
+        host_files: HostFiles,
     ) -> (RpcServer, TxChannel, RxChannel) {
         let client_to_server = channel::<Result<Vec<u8>, WireRxErrorKind>>(depth);
         let server_to_client = channel::<Vec<u8>>(depth);
@@ -625,7 +663,10 @@ impl RpcApp {
         let spawner = TokioSpawner::default();
         let handler_panicked = spawner.handler_panicked.clone();
 
-        let mut dispatcher = RpcApp::new(RpcContext::with_lister(lister, probe_broker), spawner);
+        let mut dispatcher = RpcApp::new(
+            RpcContext::with_lister(lister, probe_broker, host_files),
+            spawner,
+        );
         let vkk = dispatcher.min_key_len();
         dispatcher
             .context
@@ -636,7 +677,7 @@ impl RpcApp {
                 server: Server::new(
                     server_to_client_tx,
                     client_to_server_rx,
-                    vec![0u8; 1024 * 1024].into_boxed_slice(), // 1MB buffer
+                    vec![0u8; MAX_REQUEST_LEN].into_boxed_slice(),
                     dispatcher,
                     vkk,
                 ),
@@ -712,6 +753,7 @@ mod tests {
             sender: PostcardSender::new(WireTx::new(wire_tx), VarKeyKind::Key4),
             probe_broker: Arc::new(ProbeBroker::new()),
             lister: Arc::new(LimitedLister::new(ProbeAccess::All)),
+            host_files: HostFiles::Allow,
         };
 
         ctx.run_blocking::<RttTopic, _, _, _>((), |_, (), sender| {
@@ -729,6 +771,36 @@ mod tests {
         assert_eq!(frames.await.unwrap(), EVENTS);
     }
 
+    fn context_with_host_files(host_files: HostFiles) -> RpcSpawnContext {
+        let (wire_tx, _) = channel::<Vec<u8>>(1);
+        RpcSpawnContext {
+            state: ConnectionState::new(),
+            sender: PostcardSender::new(WireTx::new(wire_tx), VarKeyKind::Key4),
+            probe_broker: Arc::new(ProbeBroker::new()),
+            lister: Arc::new(LimitedLister::new(ProbeAccess::All)),
+            host_files,
+        }
+    }
+
+    #[test]
+    fn remote_server_rejects_semihosting_file_mappings() {
+        let mut mapped = SemihostingOptions::new();
+        mapped
+            .add_file("in.txt".to_owned(), "/etc/passwd".to_owned())
+            .unwrap();
+
+        let remote = context_with_host_files(HostFiles::Deny);
+        assert!(remote.semihosting_options(mapped.clone()).is_err());
+        assert!(
+            remote
+                .semihosting_options(SemihostingOptions::new())
+                .is_ok()
+        );
+
+        let local = context_with_host_files(HostFiles::Allow);
+        assert!(local.semihosting_options(mapped).is_ok());
+    }
+
     /// The client can go away while a task publishes events. The server must
     /// not panic.
     #[tokio::test]
@@ -741,6 +813,7 @@ mod tests {
             sender: PostcardSender::new(WireTx::new(wire_tx), VarKeyKind::Key4),
             probe_broker: Arc::new(ProbeBroker::new()),
             lister: Arc::new(LimitedLister::new(ProbeAccess::All)),
+            host_files: HostFiles::Allow,
         };
         let result = tokio::spawn(async move {
             ctx.run_blocking::<RttTopic, _, _, _>((), |_, (), sender| {
@@ -775,6 +848,7 @@ mod tests {
             sender: PostcardSender::new(WireTx::new(wire_tx), VarKeyKind::Key4),
             probe_broker: Arc::new(ProbeBroker::new()),
             lister: Arc::new(LimitedLister::new(ProbeAccess::All)),
+            host_files: HostFiles::Allow,
         };
         let token = ctx.cancellation_token();
 

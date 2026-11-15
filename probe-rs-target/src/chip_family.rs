@@ -106,6 +106,7 @@ pub enum Architecture {
 
 /// Instruction set used by a core
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "SerializedInstructionSet")]
 pub enum InstructionSet {
     /// ARM Thumb 2 instruction set
     Thumb2,
@@ -113,16 +114,66 @@ pub enum InstructionSet {
     A32,
     /// ARM A64 (aarch64) instruction set
     A64,
-    /// RISC-V 32-bit uncompressed instruction sets (RV32) - covers all ISA variants that use 32-bit instructions.
-    RV32,
-    /// RISC-V 32-bit compressed instruction sets (RV32C) - covers all ISA variants that allow compressed 16-bit instructions.
-    RV32C,
-    /// RISC-V 64-bit uncompressed instruction sets (RV64) - covers all ISA variants that use 32-bit instructions in 64-bit mode.
-    RV64,
-    /// RISC-V 64-bit compressed instruction sets (RV64C) - covers all ISA variants that allow compressed 16-bit instructions in 64-bit mode.
-    RV64C,
+    /// RISC-V instruction set
+    Riscv {
+        /// The register width.
+        xlen: Xlen,
+        /// The C extension: compressed 16-bit instructions.
+        c: bool,
+        /// The F extension: single-precision floating point. Also set for the D and Q extensions,
+        /// which depend on F.
+        f: bool,
+        /// The E base: only the registers x0-x15.
+        e: bool,
+    },
     /// Xtensa instruction set
     Xtensa,
+}
+
+/// The deserialized form of [`InstructionSet`]. It also accepts the RISC-V variants of earlier
+/// versions, so that earlier core dumps load.
+#[derive(Deserialize)]
+enum SerializedInstructionSet {
+    Thumb2,
+    A32,
+    A64,
+    Riscv {
+        xlen: Xlen,
+        c: bool,
+        #[serde(default)]
+        f: bool,
+        #[serde(default)]
+        e: bool,
+    },
+    Xtensa,
+    RV32,
+    RV32C,
+    RV64,
+    RV64C,
+}
+
+impl From<SerializedInstructionSet> for InstructionSet {
+    fn from(value: SerializedInstructionSet) -> Self {
+        let riscv = |xlen, c| InstructionSet::Riscv {
+            xlen,
+            c,
+            f: false,
+            e: false,
+        };
+        match value {
+            SerializedInstructionSet::Thumb2 => InstructionSet::Thumb2,
+            SerializedInstructionSet::A32 => InstructionSet::A32,
+            SerializedInstructionSet::A64 => InstructionSet::A64,
+            SerializedInstructionSet::Riscv { xlen, c, f, e } => {
+                InstructionSet::Riscv { xlen, c, f, e }
+            }
+            SerializedInstructionSet::Xtensa => InstructionSet::Xtensa,
+            SerializedInstructionSet::RV32 => riscv(Xlen::X32, false),
+            SerializedInstructionSet::RV32C => riscv(Xlen::X32, true),
+            SerializedInstructionSet::RV64 => riscv(Xlen::X64, false),
+            SerializedInstructionSet::RV64C => riscv(Xlen::X64, true),
+        }
+    }
 }
 
 impl InstructionSet {
@@ -134,21 +185,19 @@ impl InstructionSet {
             "aarch64" => Some(InstructionSet::A64),
             "xtensa" => Some(InstructionSet::Xtensa),
             other => {
-                if let Some(features) = other.strip_prefix("riscv32") {
-                    if features.contains('c') {
-                        Some(InstructionSet::RV32C)
-                    } else {
-                        Some(InstructionSet::RV32)
-                    }
-                } else if let Some(features) = other.strip_prefix("riscv64") {
-                    if features.contains('c') {
-                        Some(InstructionSet::RV64C)
-                    } else {
-                        Some(InstructionSet::RV64)
-                    }
+                let (xlen, features) = if let Some(features) = other.strip_prefix("riscv32") {
+                    (Xlen::X32, features)
                 } else {
-                    None
-                }
+                    (Xlen::X64, other.strip_prefix("riscv64")?)
+                };
+                Some(InstructionSet::Riscv {
+                    xlen,
+                    c: features.contains('c'),
+                    // G is IMAFD.
+                    f: features.contains('f') || features.contains('g'),
+                    // The base ISA letter comes first, for example `riscv32emc`.
+                    e: features.starts_with('e'),
+                })
             }
         }
     }
@@ -162,11 +211,9 @@ impl InstructionSet {
             }
             InstructionSet::A32 => 4,
             InstructionSet::A64 => 4,
-            InstructionSet::RV32 => 4,
-            InstructionSet::RV32C => 2,
-            // RV64 uses 32-bit base instructions; compressed mode allows 16-bit instructions
-            InstructionSet::RV64 => 4,
-            InstructionSet::RV64C => 2,
+            // The C extension allows 16-bit instructions
+            InstructionSet::Riscv { c: true, .. } => 2,
+            InstructionSet::Riscv { c: false, .. } => 4,
             InstructionSet::Xtensa => 2,
         }
     }
@@ -182,12 +229,31 @@ impl InstructionSet {
             return true;
         }
 
-        matches!(
-            (self, instr_set),
-            (InstructionSet::RV32C, InstructionSet::RV32)
-                | (InstructionSet::RV64C, InstructionSet::RV64)
-        )
+        match (*self, instr_set) {
+            (
+                InstructionSet::Riscv { xlen, c, f, e },
+                InstructionSet::Riscv {
+                    xlen: image_xlen,
+                    c: image_c,
+                    f: image_f,
+                    e: image_e,
+                },
+            ) => {
+                // RV32E code uses a subset of the RV32I registers, so RV32I cores also run it.
+                xlen == image_xlen && (c || !image_c) && (f || !image_f) && (!e || image_e)
+            }
+            _ => false,
+        }
     }
+}
+
+/// The register width of a RISC-V core
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Xlen {
+    /// 32-bit registers (RV32)
+    X32,
+    /// 64-bit registers (RV64)
+    X64,
 }
 
 /// The current endianness of a core
@@ -530,6 +596,52 @@ impl ChipFamily {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn riscv_target_triples() {
+        let riscv = |xlen, c, f, e| Some(InstructionSet::Riscv { xlen, c, f, e });
+        let from = InstructionSet::from_target_triple;
+        assert_eq!(
+            from("riscv32imac-unknown-none-elf"),
+            riscv(Xlen::X32, true, false, false)
+        );
+        assert_eq!(
+            from("riscv32imafc-unknown-none-elf"),
+            riscv(Xlen::X32, true, true, false)
+        );
+        assert_eq!(
+            from("riscv32emc-unknown-none-elf"),
+            riscv(Xlen::X32, true, false, true)
+        );
+        assert_eq!(
+            from("riscv64gc-unknown-none-elf"),
+            riscv(Xlen::X64, true, true, false)
+        );
+    }
+
+    #[test]
+    fn riscv_f_compatibility() {
+        let riscv = |f| InstructionSet::Riscv {
+            xlen: Xlen::X32,
+            c: true,
+            f,
+            e: false,
+        };
+        assert!(riscv(true).is_compatible(riscv(false)));
+        assert!(!riscv(false).is_compatible(riscv(true)));
+    }
+
+    #[test]
+    fn riscv_e_compatibility() {
+        let riscv = |e| InstructionSet::Riscv {
+            xlen: Xlen::X32,
+            c: true,
+            f: false,
+            e,
+        };
+        assert!(riscv(false).is_compatible(riscv(true)));
+        assert!(!riscv(true).is_compatible(riscv(false)));
+    }
 
     fn family_with_region_port(port: &str) -> ChipFamily {
         family(&["ahb-ap"], port)

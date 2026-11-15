@@ -26,8 +26,8 @@ use crate::rpc::{
     },
 };
 use probe_rs::{
-    Architecture, CoreInformation, CoreRegisters, CoreStatus, CoreType, Error, RegisterId,
-    RegisterValue, VectorCatchCondition,
+    Architecture, CoreInformation, CoreRegisters, CoreStatus, CoreType, Error, InstructionSet,
+    RegisterId, RegisterValue, VectorCatchCondition,
 };
 use probe_rs_debug::{
     ColumnType, DebugRegisters, ObjectRef, SourceLocation as DebugSourceLocation, StackFrame,
@@ -40,7 +40,7 @@ use probe_rs_rpc::breakpoints::{
 use probe_rs_rpc::core_ops::{WireCoreMetadata, WireCoreStatus, WireRegisterId, WireSteppingMode};
 use probe_rs_rpc::disassemble::{WireDisassembledInstruction, WireSource};
 use probe_rs_rpc::flash::{
-    DownloadOptions as WireDownloadOptions, ProgressEvent as WireProgressEvent, VerifyResult,
+    DownloadOptions as WireDownloadOptions, ProgressEvent as WireProgressEvent,
 };
 use probe_rs_rpc::info::WireSessionTargetMetadata;
 use probe_rs_rpc::stack_trace::{
@@ -130,6 +130,7 @@ pub struct CorePerAttachInfo {
     pub architecture: Architecture,
     pub fpu_support: bool,
     pub fp_register_count: Option<usize>,
+    pub instruction_set: Option<InstructionSet>,
 }
 
 impl CorePerAttachInfo {
@@ -155,6 +156,7 @@ impl CorePerAttachInfo {
             architecture,
             fpu_support: false,
             fp_register_count: None,
+            instruction_set: None,
         }
     }
 
@@ -165,6 +167,7 @@ impl CorePerAttachInfo {
             fp_register_count: metadata
                 .floating_point_register_count
                 .map(|count| count as usize),
+            instruction_set: Some(from_wire_instruction_set(metadata.instruction_set)),
         }
     }
 }
@@ -204,6 +207,7 @@ impl RpcBackend {
                     *core_type,
                     info.fpu_support,
                     info.fp_register_count,
+                    info.instruction_set,
                 );
                 CoreMetadata {
                     architecture: info.architecture,
@@ -244,14 +248,14 @@ impl RpcBackend {
             .map_err(rpc_err)
     }
 
-    pub(crate) async fn write_memory_8(
+    pub(crate) async fn write_bytes(
         &self,
         core_index: usize,
         address: u64,
         data: Vec<u8>,
     ) -> Result<(), Error> {
         self.core(core_index)
-            .write_memory_8(address, data)
+            .write_bytes(address, data)
             .await
             .map_err(rpc_err)
     }
@@ -849,39 +853,23 @@ impl RpcBackend {
                 .map_err(|e| DebuggerError::Other(anyhow::anyhow!(e)))?;
         }
 
-        let run_flash = if config.verify_before_flashing {
-            match session
-                .verify(loader_key, async |event| {
-                    progress(event);
-                })
-                .await
-                .map_err(|e| DebuggerError::Other(anyhow::anyhow!(e)))?
-            {
-                VerifyResult::Ok => false,
-                VerifyResult::Mismatch => true,
-            }
-        } else {
-            true
+        let options = WireDownloadOptions {
+            keep_unwritten_bytes: config.restore_unwritten_bytes,
+            do_chip_erase: config.full_chip_erase,
+            skip_erase: false,
+            preverify: config.verify_before_flashing,
+            verify: config.verify_after_flashing,
+            disable_double_buffering: false,
+            preferred_algos: Vec::new(),
+            ram_chunk_size: None,
         };
 
-        if run_flash {
-            let options = WireDownloadOptions {
-                keep_unwritten_bytes: config.restore_unwritten_bytes,
-                do_chip_erase: config.full_chip_erase,
-                skip_erase: false,
-                verify: config.verify_after_flashing,
-                disable_double_buffering: false,
-                preferred_algos: Vec::new(),
-                ram_chunk_size: None,
-            };
-
-            session
-                .flash(options, loader_key, async |event| {
-                    progress(event);
-                })
-                .await
-                .map_err(|e| DebuggerError::Other(anyhow::anyhow!(e)))?;
-        }
+        session
+            .flash(options, loader_key, async |event| {
+                progress(event);
+            })
+            .await
+            .map_err(|e| DebuggerError::Other(anyhow::anyhow!(e)))?;
 
         Ok(())
     }
@@ -938,7 +926,37 @@ mod test {
     use probe_rs::{Architecture, CoreRegisters, CoreType, RegisterRole};
 
     use super::CorePerAttachInfo;
-    use probe_rs_rpc::core_ops::WireCoreMetadata;
+    use probe_rs_rpc::core_ops::{WireCoreMetadata, WireInstructionSet, WireXlen};
+
+    #[test]
+    fn rv32e_metadata_selects_rv32e_registers() {
+        let info = CorePerAttachInfo::from_wire(
+            Architecture::Riscv,
+            WireCoreMetadata {
+                fpu_support: false,
+                floating_point_register_count: None,
+                instruction_set: WireInstructionSet::Riscv {
+                    xlen: WireXlen::X32,
+                    c: true,
+                    f: false,
+                    e: true,
+                },
+            },
+        );
+
+        let registers = CoreRegisters::for_core_type(
+            CoreType::Riscv,
+            info.fpu_support,
+            info.fp_register_count,
+            info.instruction_set,
+        );
+
+        assert!(
+            registers
+                .all_registers()
+                .all(|register| register.name() != "x16")
+        );
+    }
 
     #[test]
     fn live_fpu_metadata_selects_floating_point_registers() {
@@ -947,7 +965,7 @@ mod test {
             WireCoreMetadata {
                 fpu_support: true,
                 floating_point_register_count: Some(32),
-                instruction_set: probe_rs_rpc::core_ops::WireInstructionSet::Thumb2,
+                instruction_set: WireInstructionSet::Thumb2,
             },
         );
 
@@ -955,6 +973,7 @@ mod test {
             CoreType::Armv7em,
             info.fpu_support,
             info.fp_register_count,
+            info.instruction_set,
         );
 
         assert_eq!(info.fp_register_count, Some(32));
@@ -972,7 +991,7 @@ mod test {
             WireCoreMetadata {
                 fpu_support: false,
                 floating_point_register_count: None,
-                instruction_set: probe_rs_rpc::core_ops::WireInstructionSet::Thumb2,
+                instruction_set: WireInstructionSet::Thumb2,
             },
         );
 
@@ -980,6 +999,7 @@ mod test {
             CoreType::Armv7em,
             info.fpu_support,
             info.fp_register_count,
+            info.instruction_set,
         );
 
         assert!(

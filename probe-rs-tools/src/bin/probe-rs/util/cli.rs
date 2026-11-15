@@ -42,7 +42,7 @@ use crate::util::{
 };
 use probe_rs_rpc::CancelTopic;
 use probe_rs_rpc::core_ops::{WireBreakpointCause, WireHaltReason};
-use probe_rs_rpc::flash::{BootInfo, DownloadOptions, FlashLayout, ProgressEvent, VerifyResult};
+use probe_rs_rpc::flash::{BootInfo, DownloadOptions, FlashLayout, ProgressEvent};
 use probe_rs_rpc::format::FormatOptions;
 use probe_rs_rpc::monitor::{ChannelInfo, MonitorExitReason};
 use probe_rs_rpc::monitor::{MonitorMode, MonitorOptions, RttEvent, SemihostingEvent, SerialEvent};
@@ -150,7 +150,8 @@ pub async fn attach_request(
         )
         .await?;
         // The probe gets a new USB device address when it enumerates again.
-        probe.usb_location = None;
+        let probe_rs_rpc::probe::ProbeTransport::Usb(usb) = &mut probe.transport;
+        usb.usb_location = None;
     }
 
     Ok(AttachRequest {
@@ -244,9 +245,18 @@ pub async fn select_probe(
             std::io::stderr().flush().unwrap();
 
             let mut input = String::new();
-            std::io::stdin()
+            let read = std::io::stdin()
                 .read_line(&mut input)
-                .expect("Expect input for probe selection");
+                .context("Failed to read the probe selection")?;
+
+            // End of input: nobody can answer, so fail as `--non-interactive` does.
+            if read == 0 {
+                eprintln!();
+                return Err(MultipleProbesFound {
+                    list: list.iter().map(|probe| probe.to_string()).collect(),
+                }
+                .into());
+            }
 
             let probe_idx = input
                 .trim()
@@ -553,6 +563,7 @@ pub async fn flash(
         keep_unwritten_bytes: download_options.restore_unwritten,
         do_chip_erase: download_options.chip_erase,
         skip_erase: false,
+        preverify: download_options.preverify,
         verify: download_options.verify,
         disable_double_buffering: download_options.disable_double_buffering,
         preferred_algos: download_options.prefer_flash_algorithm,
@@ -573,51 +584,24 @@ pub async fn flash(
 
     let mut flash_layout = None;
 
-    let run_flash = if download_options.preverify {
-        let pb = if download_options.disable_progressbars {
-            None
-        } else {
-            Some(CliProgressBars::new())
-        };
-        let result = session
-            .verify(loader.loader, async |event| {
-                if let ProgressEvent::FlashLayoutReady {
-                    flash_layout: layout,
-                } = &event
-                {
-                    flash_layout = Some(layout.clone());
-                }
-                if let Some(ref pb) = pb {
-                    pb.handle(event);
-                }
-            })
-            .await?;
-
-        result == VerifyResult::Mismatch
+    let pb = if download_options.disable_progressbars {
+        None
     } else {
-        true
+        Some(CliProgressBars::new())
     };
-
-    if run_flash {
-        let pb = if download_options.disable_progressbars {
-            None
-        } else {
-            Some(CliProgressBars::new())
-        };
-        session
-            .flash(options, loader.loader, async |event| {
-                if let ProgressEvent::FlashLayoutReady {
-                    flash_layout: layout,
-                } = &event
-                {
-                    flash_layout = Some(layout.clone());
-                }
-                if let Some(ref pb) = pb {
-                    pb.handle(event);
-                }
-            })
-            .await?;
-    }
+    session
+        .flash(options, loader.loader, async |event| {
+            if let ProgressEvent::FlashLayoutReady {
+                flash_layout: layout,
+            } = &event
+            {
+                flash_layout = Some(layout.clone());
+            }
+            if let Some(ref pb) = pb {
+                pb.handle(event);
+            }
+        })
+        .await?;
 
     // Visualise flash layout to file if requested.
     if let Some(visualizer_output) = download_options.flash_layout_output_path

@@ -124,10 +124,10 @@ fn monitor_impl(
 ) -> anyhow::Result<MonitorExitReason> {
     let shared_session = ctx.shared_session(request.sessid);
 
-    let mut semihosting_sink =
-        MonitorEventHandler::new(request.options.semihosting_options, |event| {
-            _ = sender.send_semihosting_event(event)
-        });
+    let mut semihosting_sink = MonitorEventHandler::new(
+        ctx.semihosting_options(request.options.semihosting_options)?,
+        |event| _ = sender.send_semihosting_event(event),
+    );
 
     let client_key = request.options.rtt_client;
     let core_id = client_key
@@ -145,12 +145,7 @@ fn monitor_impl(
         discard_serial_input(serial);
     }
 
-    {
-        let mut session = shared_session.session_blocking();
-        prepare_monitor_mode(&request.mode, &mut session, run_loop.core_id)?;
-    }
-
-    let rtt_poller = client_key.map(|client| RttPoller {
+    let mut rtt_poller = client_key.map(|client| RttPoller {
         rtt_client: shared_session.object_storage().cell(client),
         clear_control_block: request.mode.should_clear_rtt_header(),
         sender: |message| {
@@ -159,6 +154,12 @@ fn monitor_impl(
                 .context("Failed to send RTT event")
         },
     });
+    run_loop.start_poller(&shared_session, &mut rtt_poller)?;
+
+    {
+        let mut session = shared_session.session_blocking();
+        prepare_monitor_mode(&request.mode, &mut session, run_loop.core_id)?;
+    }
 
     let exit_reason = with_serial_forwarding(target_serial.as_ref(), &sender, || {
         run_loop.run_until(

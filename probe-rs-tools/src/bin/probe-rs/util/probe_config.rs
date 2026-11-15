@@ -4,10 +4,10 @@ use std::{any::Any, collections::HashMap};
 
 use anyhow::Context as _;
 use probe_rs::probe::{
-    DebugProbeError, DebugProbeSelector, Probe, WireProtocol,
+    DebugProbeError, DebugProbeSelector, Probe, ProbeTransport, WireProtocol,
     ch347::{Ch347, Ch347Config},
     ftdi::{FtdiConfig, FtdiProbe},
-    list::{ProbeListItem, ProbeLister},
+    list::{ProbeListItem, ProbeLister, default_probe_index},
     target_serial::{HostSerialPort, LineState, PortSelector, SerialSettings, TargetSerial},
     usb_util::UsbSerialFilter,
 };
@@ -181,7 +181,7 @@ impl SerialConfig {
         let Some(usb) = &self.usb else {
             return Ok(None);
         };
-        let selector = usb
+        let DebugProbeSelector::Usb(selector) = usb
             .parse::<DebugProbeSelector>()
             .with_context(|| format!("Invalid serial port `{usb}`"))?;
         Ok(Some(PortSelector::Usb(UsbSerialFilter {
@@ -250,6 +250,7 @@ impl ProbeConfigs {
             .filter(|(selector, _)| selector.matches_selector(probe))
             .collect::<Vec<_>>();
         matching.sort_by_key(|(selector, _)| {
+            let DebugProbeSelector::Usb(selector) = selector;
             (
                 selector.serial_number.is_some(),
                 selector.interface.is_some(),
@@ -266,8 +267,9 @@ impl ProbeConfigs {
     /// Returns whether an entry with a serial number can match `probe`. Only these entries need
     /// the serial number of the probe.
     fn needs_serial_number(&self, probe: &DebugProbeSelector) -> bool {
+        let DebugProbeSelector::Usb(probe) = probe;
         probe.serial_number.is_none()
-            && self.0.keys().any(|selector| {
+            && self.0.keys().any(|DebugProbeSelector::Usb(selector)| {
                 selector.serial_number.is_some()
                     && (selector.vendor_id, selector.product_id)
                         == (probe.vendor_id, probe.product_id)
@@ -290,10 +292,13 @@ impl<L: ProbeLister> ConfiguredLister<L> {
     /// Adds the serial number of the probe, so that the entries with a serial number match.
     fn complete_selector(&self, selector: &DebugProbeSelector) -> DebugProbeSelector {
         let mut selector = selector.clone();
-        if self.configs.needs_serial_number(&selector)
-            && let [info] = self.inner.list(Some(&selector)).as_slice()
-        {
-            selector.serial_number = info.serial_number.clone();
+        if self.configs.needs_serial_number(&selector) {
+            let list = self.inner.list(Some(&selector));
+            if let Some(index) = default_probe_index(&list) {
+                let DebugProbeSelector::Usb(usb) = &mut selector;
+                let ProbeTransport::Usb(info) = &list[index].transport;
+                usb.serial_number = info.serial_number.clone();
+            }
         }
         selector
     }
