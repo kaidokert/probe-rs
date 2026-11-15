@@ -4,7 +4,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use probe_rs::{Core, CoreType, Error, HaltReason, MemoryInterface, VectorCatchCondition};
+use probe_rs::{
+    Core, CoreStatus, CoreType, Error, HaltReason, MemoryInterface, VectorCatchCondition,
+};
 
 use crate::rpc::SessionState;
 
@@ -40,6 +42,24 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Interval between status polls of other cores. Longer than the primary interval to limit probe traffic.
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+#[derive(Clone, Default)]
+struct SecondaryCoreState {
+    has_run: bool,
+}
+
+impl SecondaryCoreState {
+    fn should_handle(&mut self, status: CoreStatus) -> bool {
+        match status {
+            CoreStatus::Running | CoreStatus::Sleeping => self.has_run = true,
+            // Attaching can leave an unused core deliberately halted. Do not resume it
+            // or treat it as a firmware failure before observing execution.
+            CoreStatus::Halted(HaltReason::Request) if !self.has_run => return false,
+            _ => {}
+        }
+        true
+    }
+}
+
 impl RunLoop {
     /// Starts `poller`. Call this before resetting the target: the reset can start cores that
     /// probe-rs does not halt, and they may write what the poller clears.
@@ -64,7 +84,8 @@ impl RunLoop {
     /// Vector catch, the initial resume, and the poller run only on [`Self::core_id`]. Other cores
     /// are observed with `status()` only. A disabled hart is skipped and retried later. An
     /// unexpected halt, lock-up, or semihosting result on any observed core uses the same predicate
-    /// as the primary core.
+    /// as the primary core. A secondary held by a debug request is left halted until execution
+    /// has been observed on that core.
     ///
     /// Upon halt the predicate is invoked with the halt reason:
     /// * If the predicate returns `Ok(Some(r))` the run loop returns `Ok(ReturnReason::Predicate(r))`.
@@ -180,6 +201,7 @@ impl RunLoop {
         let start = Instant::now();
         let core_count = shared_session.session_blocking().target().cores.len();
         let mut next_wakeup = vec![start; core_count];
+        let mut secondary_states = vec![SecondaryCoreState::default(); core_count];
 
         loop {
             let mut next_poll;
@@ -191,7 +213,8 @@ impl RunLoop {
                     next_poll = DEFAULT_POLL_INTERVAL;
                     let mut core = session.core(self.core_id)?;
                     let memory_port = poller.memory_port(&core);
-                    let return_reason = self.check_core(&mut core, &mut next_poll, predicate)?;
+                    let return_reason =
+                        self.check_core(&mut core, &mut next_poll, predicate, None)?;
 
                     // Poll RTT after the halt check, so one last poll after a halt flushes
                     // messages the core printed before halting, such as a panic message.
@@ -230,6 +253,7 @@ impl RunLoop {
                     let mut core = match session.core(idx) {
                         Ok(core) => core,
                         Err(Error::CoreDisabled(_)) => {
+                            secondary_states[idx] = SecondaryCoreState::default();
                             // Retry on the next primary poll so a hart that leaves reset is
                             // configured before it can panic.
                             continue;
@@ -246,7 +270,12 @@ impl RunLoop {
 
                     let mut duration = WATCH_POLL_INTERVAL;
                     match self
-                        .check_core(&mut core, &mut duration, predicate)
+                        .check_core(
+                            &mut core,
+                            &mut duration,
+                            predicate,
+                            Some(&mut secondary_states[idx]),
+                        )
                         .and_then(Option::transpose)
                     {
                         Ok(Some(reason)) => return Ok(reason),
@@ -287,11 +316,18 @@ impl RunLoop {
         core: &mut Core<'_>,
         next_poll: &mut Duration,
         predicate: &mut F,
+        secondary_state: Option<&mut SecondaryCoreState>,
     ) -> Result<Option<Result<ReturnReason<R>>>>
     where
         F: FnMut(HaltReason, &mut Core) -> Result<Option<R>>,
     {
-        Ok(match core.status()? {
+        let status = core.status()?;
+        if let Some(state) = secondary_state
+            && !state.should_handle(status)
+        {
+            return Ok(None);
+        }
+        Ok(match status {
             probe_rs::CoreStatus::Halted(reason) => match predicate(reason, core) {
                 Ok(Some(r)) => Some(Ok(ReturnReason::Predicate(r))),
                 Err(e) => Some(Err(e)),
@@ -372,6 +408,37 @@ where
             poller.exit(core)
         } else {
             NoopPoller.exit(core)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SecondaryCoreState;
+    use probe_rs::{BreakpointCause, CoreStatus, HaltReason};
+
+    #[test]
+    fn held_secondary_is_left_alone_until_it_executes() {
+        for active in [CoreStatus::Running, CoreStatus::Sleeping] {
+            let mut state = SecondaryCoreState::default();
+            let held = CoreStatus::Halted(HaltReason::Request);
+            assert!(!state.should_handle(held));
+            assert!(state.should_handle(CoreStatus::Unknown));
+            assert!(!state.should_handle(held));
+            assert!(state.should_handle(active));
+            assert!(state.should_handle(held));
+        }
+    }
+
+    #[test]
+    fn faults_and_breakpoints_are_reported_without_observing_execution() {
+        for status in [
+            CoreStatus::LockedUp,
+            CoreStatus::Halted(HaltReason::Exception),
+            CoreStatus::Halted(HaltReason::Breakpoint(BreakpointCause::Software)),
+            CoreStatus::Halted(HaltReason::Watchpoint),
+        ] {
+            assert!(SecondaryCoreState::default().should_handle(status));
         }
     }
 }
