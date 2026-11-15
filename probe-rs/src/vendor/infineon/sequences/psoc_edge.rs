@@ -336,7 +336,13 @@ impl ArmDebugSequence for PsocEdge {
         // CM33 (system) reset path: issue AIRCR.SYSRESETREQ, then re-enable CM55
         // debug access if it was active before the reset.
         tracing::debug!("PSoC Edge: system reset via AIRCR.SYSRESETREQ");
-        cortex_m_reset_system(interface)?;
+        match cortex_m_reset_system(interface) {
+            // SYSRESETREQ can reset SWD before the write acknowledgement arrives.
+            Err(ArmError::Dap(crate::architecture::arm::DapError::NoAcknowledge)) => {
+                cortex_m_wait_for_reset(interface)?;
+            }
+            result => result?,
+        }
 
         // Give secure boot time to re-run before touching CM55 debug registers.
         std::thread::sleep(std::time::Duration::from_millis(RESET_FINISH_DELAY_MS));
